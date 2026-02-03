@@ -1,0 +1,54 @@
+# Node
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+
+# React Native
+*.keystore
+*.jks
+*.pem
+
+# Metro / Bundler
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Android (prebuild output)
+android/
+
+# iOS (if added later)
+ios/Pods/
+ios/build/
+ios/.idea/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# SQLite
+*.db
+
+# Coverage
+coverage/
+
+# Misc
+*.swp
+*.swo
+*.tmp

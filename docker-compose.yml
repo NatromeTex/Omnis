@@ -1,0 +1,15 @@
+services:
+  android:
+    build: .
+    volumes:
+      - .:/app:cached
+      - gradle-cache:/opt/gradle-cache
+      - android-sdk:/opt/android-sdk
+      - npm-cache:/root/.npm
+    working_dir: /app
+    tty: true
+
+volumes:
+  gradle-cache:
+  android-sdk:
+  npm-cache:

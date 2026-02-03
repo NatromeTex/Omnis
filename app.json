@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Omnis",
+    "slug": "Omnis",
+    "version": "0.6.0-alpha",
+    "orientation": "portrait",
+    "icon": "./engine/assets/icon.png",
+    "scheme": "omnis",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.omnis.app"
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.omnis.app",
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "output": "static"
+    },
+    "plugins": ["expo-router", "expo-secure-store"],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
