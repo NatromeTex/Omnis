@@ -2,7 +2,8 @@ services:
   android:
     build: .
     volumes:
-      - .:/app:cached
+      - .:/app
+      - ./artifacts:/artifacts
       - gradle-cache:/opt/gradle-cache
       - android-sdk:/opt/android-sdk
       - npm-cache:/root/.npm

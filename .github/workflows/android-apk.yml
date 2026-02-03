@@ -3,35 +3,43 @@ name: Android APK (Beta)
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build-android-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare artifacts directory
+        run: mkdir -p artifacts
+
       - name: Build Docker image
-        run: docker compose build
+        run: docker compose build android
 
       - name: Start Android container
         run: docker compose up -d android
 
-      - name: Expo prebuild (Android)
-        run: docker compose exec android npx expo prebuild --platform android --non-interactive
-
-      - name: Install dependencies
-        run: docker compose exec android npm install
+      - name: Install JS dependencies
+        run: docker compose exec android npm ci
 
       - name: Build APK
-        run: docker compose exec android bash -c "cd android && ./gradlew assembleRelease"
+        run: >
+          docker compose exec android bash -c "
+            npx expo prebuild --platform android --non-interactive --no-install &&
+            cd android &&
+            echo 'org.gradle.daemon=false' >> gradle.properties &&
+            echo 'org.gradle.jvmargs=-Xmx4g' >> gradle.properties &&
+            ./gradlew assembleRelease &&
+            cp app/build/outputs/apk/release/*.apk /artifacts/
+          "
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: omnis-android-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: artifacts/*.apk
           if-no-files-found: error
