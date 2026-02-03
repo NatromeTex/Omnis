@@ -1,50 +1,63 @@
-# Welcome to your Expo app 👋
+# Omnis (0.6.0-alpha)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+[![My Skills](https://skillicons.dev/icons?i=ts,react)](https://skillicons.dev) <br>
 
-## Get started
+This is an End-to-end encrypted chat app built with Expo + React Native. This repo contains the mobile client, local storage, and crypto utilities.
 
-1. Install dependencies
+## Features
 
-   ```bash
-   npm install
-   ```
+- End-to-end encryption (AES-GCM + ECDH P-384)
+- Local message storage (SQLite)
+- Session management
 
-2. Start the app
+## Requirements
 
-   ```bash
-   npx expo start
-   ```
+- Node.js 20+
+- Docker (for containerized Android builds)
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Quick start (dev)
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Android release build (local)
 
-## Learn more
+We build Android inside Docker and ignore the generated android/ folder in git.
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+docker compose build
+docker compose up -d android
+docker compose exec android npx expo prebuild --platform android --non-interactive
+docker compose exec android npm install
+docker compose exec android bash -c "cd android && ./gradlew assembleRelease"
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+APK output:
 
-## Join the community
+android/app/build/outputs/apk/release/
 
-Join our community of developers creating universal apps.
+## CI/CD (GitHub Actions)
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The workflow builds the APK on every push to main (or manual run) and uploads it as an artifact.
+
+- Workflow: [.github/workflows/android-apk.yml](.github/workflows/android-apk.yml)
+
+## Configuration
+
+- API base URL: Settings → Backend URL
+- App version constant: [engine/constants.ts](engine/constants.ts)
+
+## Security notes
+- Tokens are stored via SecureStore on device.
+
+## Repo structure
+
+- engine/: app code
+- app/: Expo Router entry
+- docker-compose.yml: container build for Android
+- .github/workflows/: CI pipeline
+
+## License
+Proprietary (internal/beta)
