@@ -9,6 +9,7 @@ import type {
     ChatFetchResponse,
     CreateEpochRequest,
     CreateEpochResponse,
+    EpochFetchResponse,
     KeyBlob,
     LoginRequest,
     LoginResponse,
@@ -17,7 +18,8 @@ import type {
     SignupRequest,
     User,
 } from "../types";
-import { getApiBaseUrl, getAuthToken, getDeviceId } from "./storage";
+import { clearAllData } from "./database";
+import { getApiBaseUrl, getAuthToken, getDeviceId, clearAuthToken, clearCurrentUser } from "./storage";
 
 class ApiError extends Error {
   status: number;
@@ -76,6 +78,19 @@ async function request<T>(
       errorMessage =
         errorText || `Request failed with status ${response.status}`;
     }
+
+    // If auth is broken (401 Unauthorized), clear local database to prevent data leaks
+    if (response.status === 401 && requiresAuth) {
+      console.warn("[API] Auth broken, clearing local database for security");
+      try {
+        await clearAllData();
+        await clearAuthToken();
+        await clearCurrentUser();
+      } catch (clearError) {
+        console.error("[API] Failed to clear data on auth error:", clearError);
+      }
+    }
+
     throw new ApiError(errorMessage, response.status);
   }
 
@@ -265,6 +280,20 @@ export async function createEpoch(
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+/**
+ * Fetch epoch key for a specific epoch
+ * Used for on-demand epoch key fetching when keys are not included in chat fetch response
+ */
+export async function fetchEpochKey(
+  chatId: number,
+  epochId: number,
+): Promise<EpochFetchResponse> {
+  const endpoint = ENDPOINTS.CHAT_FETCH_EPOCH
+    .replace("{chat_id}", chatId.toString())
+    .replace("{epoch_id}", epochId.toString());
+  return request<EpochFetchResponse>(endpoint);
 }
 
 /**

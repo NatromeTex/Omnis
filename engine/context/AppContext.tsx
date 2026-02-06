@@ -26,16 +26,19 @@ import { clearAllData, initDatabase } from "../services/database";
 import {
     clearAuthToken,
     clearCurrentUser,
+    clearIdentityKeys,
     getApiBaseUrl,
     getAuthToken,
     getCurrentUser,
     getDeviceId,
+    getIdentityKeys,
     getThemeColor,
     isOnboardingComplete,
     setApiBaseUrl as saveApiBaseUrl,
     setThemeColor as saveThemeColor,
     setAuthToken,
     setCurrentUser,
+    setIdentityKeys,
     setOnboardingComplete,
 } from "../services/storage";
 import type { AppSettings, AuthState } from "../types";
@@ -177,10 +180,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 username: me.username,
               },
             });
+
+            // Restore identity keys from secure storage
+            const storedKeys = await getIdentityKeys();
+            if (storedKeys) {
+              dispatch({
+                type: "SET_IDENTITY_KEYS",
+                payload: {
+                  privateKey: storedKeys.privateKey,
+                  publicKey: storedKeys.publicKey,
+                },
+              });
+            }
           } catch {
             // Token is invalid, clear auth AND local data for security
             await clearAuthToken();
             await clearCurrentUser();
+            await clearIdentityKeys();
             await clearAllData(); // Clear database when session is invalid
           }
         }
@@ -255,6 +271,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         publicKey: keyBlob.identity_pub,
       },
     });
+
+    // Persist identity keys to secure storage for session restoration
+    await setIdentityKeys(privateKey, keyBlob.identity_pub);
   }, []);
 
   // Logout
@@ -268,6 +287,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Clear all sensitive data
     await clearAuthToken();
     await clearCurrentUser();
+    await clearIdentityKeys();
     await clearAllData(); // Clear local database for security
 
     dispatch({ type: "LOGOUT" });

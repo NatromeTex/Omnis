@@ -67,8 +67,13 @@ export interface Epoch {
 
 export interface ChatFetchResponse {
   messages: Message[];
-  epochs: Epoch[];
   next_cursor: number | null;
+}
+
+export interface EpochFetchResponse {
+  epoch_id: number;
+  epoch_index: number;
+  wrapped_key: string;
 }
 
 export interface SendMessageRequest {

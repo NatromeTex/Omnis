@@ -139,6 +139,50 @@ export async function clearAuthData(): Promise<void> {
  */
 export async function clearAllData(): Promise<void> {
   await clearAuthData();
+  await clearIdentityKeys();
   await SecureStore.deleteItemAsync(STORAGE_KEYS.DEVICE_ID);
   await AsyncStorage.clear();
+}
+
+// ============ Identity Key Persistence ============
+
+const IDENTITY_PRIVATE_KEY = "identityPrivateKey";
+const IDENTITY_PUBLIC_KEY = "identityPublicKey";
+
+/**
+ * Store decrypted identity keys securely
+ * Private key goes to SecureStore (hardware-backed keychain)
+ * Public key goes to AsyncStorage (not sensitive)
+ */
+export async function setIdentityKeys(
+  privateKey: string,
+  publicKey: string,
+): Promise<void> {
+  await SecureStore.setItemAsync(IDENTITY_PRIVATE_KEY, privateKey);
+  await AsyncStorage.setItem(IDENTITY_PUBLIC_KEY, publicKey);
+}
+
+/**
+ * Get stored identity keys
+ */
+export async function getIdentityKeys(): Promise<{
+  privateKey: string;
+  publicKey: string;
+} | null> {
+  const privateKey = await SecureStore.getItemAsync(IDENTITY_PRIVATE_KEY);
+  const publicKey = await AsyncStorage.getItem(IDENTITY_PUBLIC_KEY);
+
+  if (privateKey && publicKey) {
+    return { privateKey, publicKey };
+  }
+
+  return null;
+}
+
+/**
+ * Clear identity keys (on logout or auth failure)
+ */
+export async function clearIdentityKeys(): Promise<void> {
+  await SecureStore.deleteItemAsync(IDENTITY_PRIVATE_KEY);
+  await AsyncStorage.removeItem(IDENTITY_PUBLIC_KEY);
 }

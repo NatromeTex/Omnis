@@ -3,7 +3,7 @@
  */
 
 export const APP_NAME = "Omnis";
-export const APP_VERSION = "0.6.0-alpha";
+export const APP_VERSION = "0.8.1-alpha";
 
 // API Configuration
 export const DEFAULT_API_BASE_URL = "http://localhost:8000";
@@ -49,6 +49,7 @@ export const ENDPOINTS = {
   CHAT_CREATE: "/chat/create",
   CHAT_FETCH: "/chat/fetch",
   CHAT_EPOCH: "/chat/{chat_id}/epoch",
+  CHAT_FETCH_EPOCH: "/chat/{chat_id}/{epoch_id}/fetch",
   CHAT_MESSAGE: "/chat/{chat_id}/message",
 } as const;
 

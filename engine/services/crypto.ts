@@ -22,6 +22,29 @@ import {
 
 // ==================== ENCODING UTILITIES ====================
 
+type WebCryptoLike = {
+  subtle: SubtleCrypto;
+  getRandomValues: (array: Uint8Array) => Uint8Array;
+};
+
+function getWebCrypto(): WebCryptoLike | null {
+  const cryptoObj =
+    (globalThis as unknown as { crypto?: Crypto }).crypto ??
+    (globalThis as unknown as { crypto?: { webcrypto?: Crypto } }).crypto
+      ?.webcrypto;
+  if (cryptoObj?.subtle && cryptoObj.getRandomValues) {
+    return {
+      subtle: cryptoObj.subtle,
+      getRandomValues: cryptoObj.getRandomValues.bind(cryptoObj),
+    };
+  }
+  return null;
+}
+
+function toUint8Array(buffer: ArrayBuffer): Uint8Array {
+  return new Uint8Array(buffer);
+}
+
 export function base64ToBytes(base64: string): Uint8Array {
   return toByteArray(base64);
 }
@@ -58,6 +81,12 @@ export function hexToBytes(hex: string): Uint8Array {
  * Generate random bytes
  */
 function generateRandomBytes(length: number): Uint8Array {
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const bytes = new Uint8Array(length);
+    webCrypto.getRandomValues(bytes);
+    return bytes;
+  }
   return randomBytes(length);
 }
 
@@ -99,9 +128,29 @@ async function deriveKeyFromPassword(
   password: string,
   salt: Uint8Array,
 ): Promise<Uint8Array> {
-  const encoder = new TextEncoder();
-  const passwordBytes = encoder.encode(password);
-  
+  const passwordBytes = new TextEncoder().encode(password);
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const keyMaterial = await webCrypto.subtle.importKey(
+      "raw",
+      passwordBytes,
+      "PBKDF2",
+      false,
+      ["deriveBits"],
+    );
+    const bits = await webCrypto.subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        salt,
+        iterations: PBKDF2_ITERATIONS,
+        hash: "SHA-256",
+      },
+      keyMaterial,
+      AES_KEY_LENGTH * 8,
+    );
+    return toUint8Array(bits);
+  }
+
   return pbkdf2(sha256, passwordBytes, salt, {
     c: PBKDF2_ITERATIONS,
     dkLen: AES_KEY_LENGTH,
@@ -145,11 +194,11 @@ function publicKeyToSPKI(rawPublicKey: Uint8Array): Uint8Array {
 }
 
 /**
- * Convert raw P-384 private key (48 bytes) to PKCS8 format
- * Also includes the public key in the structure
+ * Convert raw P-384 private key (48 bytes) to standard PKCS8 format
+ * Produces valid DER encoding compatible with WebCrypto's exportKey('pkcs8')
  */
 function privateKeyToPKCS8(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array {
-  // ECPrivateKey structure inside PKCS8
+  // ECPrivateKey structure (will be wrapped in OCTET STRING by PKCS8_HEADER)
   const ecPrivateKey = new Uint8Array([
     0x30, 0x81, 0x9b, // SEQUENCE, length 155
     0x02, 0x01, 0x01, // INTEGER, version 1
@@ -160,9 +209,10 @@ function privateKeyToPKCS8(privateKey: Uint8Array, publicKey: Uint8Array): Uint8
     ...publicKey,
   ]);
   
-  const pkcs8 = new Uint8Array(PKCS8_HEADER.length + ecPrivateKey.length - 3);
+  // Standard PKCS8: HEADER (includes OCTET STRING wrapper tag) + ECPrivateKey
+  const pkcs8 = new Uint8Array(PKCS8_HEADER.length + ecPrivateKey.length);
   pkcs8.set(PKCS8_HEADER, 0);
-  pkcs8.set(ecPrivateKey, PKCS8_HEADER.length - 3);
+  pkcs8.set(ecPrivateKey, PKCS8_HEADER.length);
   return pkcs8;
 }
 
@@ -176,23 +226,46 @@ function spkiToPublicKey(spki: Uint8Array): Uint8Array {
 
 /**
  * Extract raw private key (48 bytes) from PKCS8 format
+ * Handles both standard PKCS8 (from WebCrypto) and legacy app format
  */
 function pkcs8ToPrivateKey(pkcs8: Uint8Array): Uint8Array {
-  // The private key starts at offset 36 (after headers) and is 48 bytes
-  // PKCS8_HEADER (23) + SEQUENCE tag (3) + version (3) + OCTET STRING tag (2) + private key (48)
-  return pkcs8.slice(PKCS8_HEADER.length + 3 + 2, PKCS8_HEADER.length + 3 + 2 + 48);
+  // Standard PKCS8 (185 bytes): HEADER(27) + SEQUENCE(3) + version(3) + OCTET_STRING_tag(2) + key(48) + ...
+  // Legacy format (182 bytes): HEADER(27)-3 overlap, private key at offset 32
+  if (pkcs8.length >= 185 && pkcs8[24] === 0x04) {
+    // Standard PKCS8: OCTET STRING at byte 24 wraps ECPrivateKey
+    // Skip: HEADER(27) + SEQUENCE_tag(3) + version(3) + OCTET_STRING_tag(2) = 35
+    return pkcs8.slice(35, 35 + 48);
+  }
+  // Legacy app format (no OCTET STRING wrapper, SEQUENCE directly at byte 24)
+  // Skip: 24 + SEQUENCE_tag(3) + version(3) + OCTET_STRING_tag(2) = 32
+  return pkcs8.slice(32, 32 + 48);
 }
 
 /**
  * Generate EC identity keypair (P-384) for ECDH
  */
 export async function generateIdentityKeyPair(): Promise<KeyPair> {
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const keyPair = await webCrypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-384" },
+      true,
+      ["deriveBits"],
+    );
+    const spki = await webCrypto.subtle.exportKey("spki", keyPair.publicKey);
+    const pkcs8 = await webCrypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+    return {
+      publicKey: bytesToBase64(toUint8Array(spki)),
+      privateKey: bytesToBase64(toUint8Array(pkcs8)),
+    };
+  }
+
   const privateKeyBytes = p384.utils.randomSecretKey();
   const publicKeyBytes = p384.getPublicKey(privateKeyBytes, false); // uncompressed format
-  
+
   const spki = publicKeyToSPKI(publicKeyBytes);
   const pkcs8 = privateKeyToPKCS8(privateKeyBytes, publicKeyBytes);
-  
+
   return {
     publicKey: bytesToBase64(spki),
     privateKey: bytesToBase64(pkcs8),
@@ -209,11 +282,28 @@ export interface EncryptedData {
 /**
  * Encrypt data with AES-GCM
  */
-function encryptAESGCM(
+async function encryptAESGCM(
   key: Uint8Array,
   plaintext: Uint8Array,
   nonce: Uint8Array,
-): Uint8Array {
+): Promise<Uint8Array> {
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const cryptoKey = await webCrypto.subtle.importKey(
+      "raw",
+      key,
+      "AES-GCM",
+      false,
+      ["encrypt"],
+    );
+    const encrypted = await webCrypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce },
+      cryptoKey,
+      plaintext,
+    );
+    return toUint8Array(encrypted);
+  }
+
   const aes = gcm(key, nonce);
   return aes.encrypt(plaintext);
 }
@@ -221,11 +311,28 @@ function encryptAESGCM(
 /**
  * Decrypt data with AES-GCM
  */
-function decryptAESGCM(
+async function decryptAESGCM(
   key: Uint8Array,
   ciphertext: Uint8Array,
   nonce: Uint8Array,
-): Uint8Array {
+): Promise<Uint8Array> {
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const cryptoKey = await webCrypto.subtle.importKey(
+      "raw",
+      key,
+      "AES-GCM",
+      false,
+      ["decrypt"],
+    );
+    const decrypted = await webCrypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce },
+      cryptoKey,
+      ciphertext,
+    );
+    return toUint8Array(decrypted);
+  }
+
   const aes = gcm(key, nonce);
   return aes.decrypt(ciphertext);
 }
@@ -241,7 +348,7 @@ export async function aesGcmEncrypt(
   const nonce = generateNonce();
   const encoder = new TextEncoder();
   const plaintextBytes = encoder.encode(plaintext);
-  const ciphertext = encryptAESGCM(epochKey, plaintextBytes, nonce);
+  const ciphertext = await encryptAESGCM(epochKey, plaintextBytes, nonce);
 
   return {
     ciphertext: bytesToBase64(ciphertext),
@@ -261,7 +368,7 @@ export async function aesGcmDecrypt(
   const nonce = base64ToBytes(nonceBase64);
   const epochKey = base64ToBytes(epochKeyBase64);
 
-  const plaintextBytes = decryptAESGCM(epochKey, ciphertext, nonce);
+  const plaintextBytes = await decryptAESGCM(epochKey, ciphertext, nonce);
   const decoder = new TextDecoder();
   return decoder.decode(plaintextBytes);
 }
@@ -282,7 +389,7 @@ export async function encryptIdentityPrivateKey(
 
   const encoder = new TextEncoder();
   const plaintextBytes = encoder.encode(privateKeyBase64);
-  const ciphertext = encryptAESGCM(derivedKey, plaintextBytes, nonce);
+  const ciphertext = await encryptAESGCM(derivedKey, plaintextBytes, nonce);
 
   return {
     encrypted: bytesToBase64(ciphertext),
@@ -306,7 +413,7 @@ export async function decryptIdentityPrivateKey(
   const ciphertext = base64ToBytes(encryptedPrivateKey);
 
   const derivedKey = await deriveKeyFromPassword(password, salt);
-  const plaintextBytes = decryptAESGCM(derivedKey, ciphertext, nonce);
+  const plaintextBytes = await decryptAESGCM(derivedKey, ciphertext, nonce);
 
   const decoder = new TextDecoder();
   return decoder.decode(plaintextBytes);
@@ -317,13 +424,13 @@ export async function decryptIdentityPrivateKey(
 /**
  * Derive ECDH shared secret and wrapping key
  */
-function deriveWrappingKey(
+async function deriveWrappingKey(
   myPrivateKeyBytes: Uint8Array,
   peerPublicKeyBytes: Uint8Array,
-): Uint8Array {
+): Promise<Uint8Array> {
   // Derive shared secret using ECDH (P-384)
   const sharedSecret = p384.getSharedSecret(myPrivateKeyBytes, peerPublicKeyBytes);
-  
+
   // The shared secret from noble is the full point (x, y coordinates)
   // We need just the x-coordinate (first 48 bytes after the 0x04 prefix for uncompressed)
   // For P-384, shared secret is 97 bytes uncompressed, we take bytes 1-49 (x-coordinate)
@@ -341,6 +448,53 @@ function deriveWrappingKey(
   return wrapKey;
 }
 
+async function deriveWrappingKeyWebCrypto(
+  myPrivateKeyPKCS8: Uint8Array,
+  peerPublicKeySPKI: Uint8Array,
+): Promise<Uint8Array> {
+  const webCrypto = getWebCrypto();
+  if (!webCrypto) {
+    throw new Error("WebCrypto is not available");
+  }
+  const privateKey = await webCrypto.subtle.importKey(
+    "pkcs8",
+    myPrivateKeyPKCS8,
+    { name: "ECDH", namedCurve: "P-384" },
+    false,
+    ["deriveBits"],
+  );
+  const publicKey = await webCrypto.subtle.importKey(
+    "spki",
+    peerPublicKeySPKI,
+    { name: "ECDH", namedCurve: "P-384" },
+    false,
+    [],
+  );
+  const sharedBits = await webCrypto.subtle.deriveBits(
+    { name: "ECDH", public: publicKey },
+    privateKey,
+    384,
+  );
+  const hkdfKey = await webCrypto.subtle.importKey(
+    "raw",
+    sharedBits,
+    "HKDF",
+    false,
+    ["deriveBits"],
+  );
+  const wrapBits = await webCrypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(32),
+      info: stringToBytes(HKDF_INFO),
+    },
+    hkdfKey,
+    256,
+  );
+  return toUint8Array(wrapBits);
+}
+
 /**
  * Wrap an epoch key for a recipient
  * Matches web.js wrapEpochKeyForRecipient
@@ -352,16 +506,19 @@ export async function wrapEpochKey(
 ): Promise<string> {
   const myPrivateKeyPKCS8 = base64ToBytes(myPrivateKeyBase64);
   const peerPublicKeySPKI = base64ToBytes(peerPublicKeyBase64);
-  
-  const myPrivateKeyBytes = pkcs8ToPrivateKey(myPrivateKeyPKCS8);
-  const peerPublicKeyBytes = spkiToPublicKey(peerPublicKeySPKI);
+  const webCrypto = getWebCrypto();
 
-  const wrapKey = deriveWrappingKey(myPrivateKeyBytes, peerPublicKeyBytes);
+  const wrapKey = webCrypto
+    ? await deriveWrappingKeyWebCrypto(myPrivateKeyPKCS8, peerPublicKeySPKI)
+    : await deriveWrappingKey(
+        pkcs8ToPrivateKey(myPrivateKeyPKCS8),
+        spkiToPublicKey(peerPublicKeySPKI),
+      );
 
   // Wrap the epoch key
   const epochKey = base64ToBytes(epochKeyBase64);
   const nonce = generateNonce();
-  const wrapped = encryptAESGCM(wrapKey, epochKey, nonce);
+  const wrapped = await encryptAESGCM(wrapKey, epochKey, nonce);
 
   // Return nonce + wrapped key concatenated
   const result = new Uint8Array(nonce.length + wrapped.length);
@@ -386,14 +543,17 @@ export async function unwrapEpochKey(
 
   const myPrivateKeyPKCS8 = base64ToBytes(myPrivateKeyBase64);
   const senderPublicKeySPKI = base64ToBytes(senderPublicKeyBase64);
-  
-  const myPrivateKeyBytes = pkcs8ToPrivateKey(myPrivateKeyPKCS8);
-  const senderPublicKeyBytes = spkiToPublicKey(senderPublicKeySPKI);
+  const webCrypto = getWebCrypto();
 
-  const wrapKey = deriveWrappingKey(myPrivateKeyBytes, senderPublicKeyBytes);
+  const wrapKey = webCrypto
+    ? await deriveWrappingKeyWebCrypto(myPrivateKeyPKCS8, senderPublicKeySPKI)
+    : await deriveWrappingKey(
+        pkcs8ToPrivateKey(myPrivateKeyPKCS8),
+        spkiToPublicKey(senderPublicKeySPKI),
+      );
 
   // Unwrap the epoch key
-  const rawEpochKey = decryptAESGCM(wrapKey, wrapped, nonce);
+  const rawEpochKey = await decryptAESGCM(wrapKey, wrapped, nonce);
 
   return bytesToBase64(rawEpochKey);
 }
@@ -405,5 +565,10 @@ export async function unwrapEpochKey(
  */
 export async function sha256Hash(dataBase64: string): Promise<string> {
   const data = base64ToBytes(dataBase64);
+  const webCrypto = getWebCrypto();
+  if (webCrypto) {
+    const digest = await webCrypto.subtle.digest("SHA-256", data);
+    return bytesToBase64(toUint8Array(digest));
+  }
   return bytesToBase64(sha256(data));
 }
