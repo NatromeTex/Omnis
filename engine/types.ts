@@ -54,6 +54,7 @@ export interface Message {
   id: number;
   sender_id: number;
   epoch_id: number;
+  reply_id: number | null;
   ciphertext: string;
   nonce: string;
   created_at: string;
@@ -80,6 +81,7 @@ export interface SendMessageRequest {
   epoch_id: number;
   ciphertext: string;
   nonce: string;
+  reply_id?: number | null;
 }
 
 export interface CreateEpochRequest {
@@ -98,6 +100,7 @@ export interface LocalMessage {
   chat_id: number;
   sender_id: number;
   epoch_id: number;
+  reply_id: number | null;
   ciphertext: string;
   nonce: string;
   plaintext?: string; // Decrypted content
@@ -136,3 +139,21 @@ export interface AppSettings {
   apiBaseUrl: string;
   themeColor: string;
 }
+
+// WebSocket types
+export interface WsHistoryFrame {
+  type: "history";
+  messages: Message[];
+  next_cursor: number | null;
+}
+
+export interface WsNewMessageFrame {
+  type: "new_message";
+  message: Message;
+}
+
+export interface WsPongFrame {
+  type: "pong";
+}
+
+export type WsServerFrame = WsHistoryFrame | WsNewMessageFrame | WsPongFrame;

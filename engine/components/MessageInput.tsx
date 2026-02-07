@@ -14,11 +14,19 @@ import Animated, {
 } from "react-native-reanimated";
 import { MAX_MESSAGE_LENGTH } from "../constants";
 import { Colors } from "../theme";
+import type { LocalMessage } from "../types";
+import { ReplyPreview } from "./ReplyPreview";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
   bottomInset?: number;
+  /** The message being replied to */
+  replyTo?: LocalMessage | null;
+  /** Display name of the reply message sender */
+  replyToSender?: string | null;
+  /** Called when user dismisses the reply */
+  onCancelReply?: () => void;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -27,6 +35,9 @@ export function MessageInput({
   onSend,
   disabled = false,
   bottomInset = 0,
+  replyTo,
+  replyToSender,
+  onCancelReply,
 }: MessageInputProps) {
   const [message, setMessage] = useState("");
   const scale = useSharedValue(1);
@@ -56,50 +67,62 @@ export function MessageInput({
 
   return (
     <View
-      style={[styles.container, { paddingBottom: Math.max(bottomInset, 8) }]}
+      style={[styles.wrapper, { paddingBottom: Math.max(bottomInset, 8) }]}
     >
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          value={message}
-          onChangeText={setMessage}
-          placeholder="Message"
-          placeholderTextColor={Colors.textMuted}
-          multiline
-          maxLength={MAX_MESSAGE_LENGTH}
-          editable={!disabled}
-          selectionColor={Colors.accent}
+      {replyTo ? (
+        <ReplyPreview
+          replyText={replyTo.plaintext || "[Encrypted]"}
+          replySender={replyToSender ?? undefined}
+          onDismiss={onCancelReply}
+          isInputBar
         />
+      ) : null}
+      <View style={styles.container}>
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.input}
+            value={message}
+            onChangeText={setMessage}
+            placeholder="Message"
+            placeholderTextColor={Colors.textMuted}
+            multiline
+            maxLength={MAX_MESSAGE_LENGTH}
+            editable={!disabled}
+            selectionColor={Colors.accent}
+          />
+        </View>
+        <AnimatedPressable
+          style={[
+            styles.sendButton,
+            canSend && styles.sendButtonActive,
+            animatedButtonStyle,
+          ]}
+          onPress={handleSend}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          disabled={!canSend}
+        >
+          <Ionicons
+            name="send"
+            size={20}
+            color={canSend ? Colors.background : Colors.textMuted}
+          />
+        </AnimatedPressable>
       </View>
-      <AnimatedPressable
-        style={[
-          styles.sendButton,
-          canSend && styles.sendButtonActive,
-          animatedButtonStyle,
-        ]}
-        onPress={handleSend}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        disabled={!canSend}
-      >
-        <Ionicons
-          name="send"
-          size={20}
-          color={canSend ? Colors.background : Colors.textMuted}
-        />
-      </AnimatedPressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    backgroundColor: Colors.background,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
   container: {
     flexDirection: "row",
     alignItems: "flex-end",
     padding: 8,
-    backgroundColor: Colors.background,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
     gap: 8,
   },
   inputContainer: {

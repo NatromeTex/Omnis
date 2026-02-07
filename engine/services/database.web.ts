@@ -111,6 +111,17 @@ export async function insertMessage(message: LocalMessage): Promise<void> {
 }
 
 /**
+ * Get a single message by ID
+ */
+export async function getMessage(messageId: number): Promise<LocalMessage | null> {
+  for (const messages of memoryDb.messages.values()) {
+    const message = messages.find((m) => m.id === messageId);
+    if (message) return { ...message };
+  }
+  return null;
+}
+
+/**
  * Get messages for a chat
  */
 export async function getMessages(

@@ -1,6 +1,6 @@
 /**
  * Chat Context
- * State management for chat functionality
+ * State management for chat functionality with WebSocket real-time delivery
  */
 
 import React, {
@@ -9,6 +9,7 @@ import React, {
     useContext,
     useEffect,
     useReducer,
+    useRef,
 } from "react";
 import {
     createChat as apiCreateChat,
@@ -34,6 +35,7 @@ import {
     getEpoch,
     getLatestEpoch,
     getLatestMessageId,
+    getMessage,
     getMessages,
     insertMessage,
     storeUnwrappedEpochKey,
@@ -42,7 +44,8 @@ import {
     upsertChat,
     upsertEpoch,
 } from "../services/database";
-import type { LocalChat, LocalMessage } from "../types";
+import { chatSocket } from "../services/websocket";
+import type { LocalChat, LocalMessage, Message, WsServerFrame } from "../types";
 import { useApp } from "./AppContext";
 
 // State types
@@ -53,6 +56,7 @@ interface ChatState {
   isLoadingChats: boolean;
   isLoadingMessages: boolean;
   isSending: boolean;
+  wsConnected: boolean;
 }
 
 type ChatAction =
@@ -63,7 +67,8 @@ type ChatAction =
   | { type: "SET_LOADING_CHATS"; payload: boolean }
   | { type: "SET_LOADING_MESSAGES"; payload: boolean }
   | { type: "SET_SENDING"; payload: boolean }
-  | { type: "UPDATE_CHAT"; payload: Partial<LocalChat> & { chat_id: number } };
+  | { type: "UPDATE_CHAT"; payload: Partial<LocalChat> & { chat_id: number } }
+  | { type: "SET_WS_CONNECTED"; payload: boolean };
 
 // Initial state
 const initialState: ChatState = {
@@ -73,6 +78,7 @@ const initialState: ChatState = {
   isLoadingChats: false,
   isLoadingMessages: false,
   isSending: false,
+  wsConnected: false,
 };
 
 // Reducer
@@ -85,6 +91,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "SET_MESSAGES":
       return { ...state, messages: action.payload };
     case "ADD_MESSAGE":
+      // Deduplicate — the message may already exist from REST fetch
+      if (state.messages.some((m) => m.id === action.payload.id)) {
+        return {
+          ...state,
+          messages: state.messages.map((m) =>
+            m.id === action.payload.id ? action.payload : m,
+          ),
+        };
+      }
       return { ...state, messages: [...state.messages, action.payload] };
     case "SET_LOADING_CHATS":
       return { ...state, isLoadingChats: action.payload };
@@ -101,6 +116,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : chat,
         ),
       };
+    case "SET_WS_CONNECTED":
+      return { ...state, wsConnected: action.payload };
     default:
       return state;
   }
@@ -114,7 +131,7 @@ interface ChatContextValue extends ChatState {
   openChat: (chatId: number) => Promise<void>;
   closeChat: () => void;
   loadMessages: (chatId: number, beforeId?: number) => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, replyId?: number | null) => Promise<void>;
   syncChats: () => Promise<void>;
 }
 
@@ -124,6 +141,12 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const { auth, identityPrivateKey, identityPublicKey } = useApp();
+
+  // Refs to avoid stale closures in WS callbacks
+  const identityPrivateKeyRef = useRef(identityPrivateKey);
+  identityPrivateKeyRef.current = identityPrivateKey;
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Load chats from local database
   const loadChats = useCallback(async () => {
@@ -198,20 +221,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [loadChats],
   );
 
-  // Open a chat and load messages
-  const openChat = useCallback(async (chatId: number) => {
-    dispatch({ type: "SET_CURRENT_CHAT", payload: chatId });
-    await clearUnreadCount(chatId);
-    await loadMessages(chatId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Close current chat
-  const closeChat = useCallback(() => {
-    dispatch({ type: "SET_CURRENT_CHAT", payload: null });
-    dispatch({ type: "SET_MESSAGES", payload: [] });
-  }, []);
-
   // Helper: unwrap an epoch key using identity key + peer public key
   const unwrapAndCacheEpochKey = useCallback(
     async (
@@ -219,7 +228,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       chatId: number,
       wrappedKey: string,
     ): Promise<string | null> => {
-      if (!identityPrivateKey) return null;
+      const privKey = identityPrivateKeyRef.current;
+      if (!privKey) return null;
 
       try {
         const chatData = await getChat(chatId);
@@ -228,7 +238,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const peerKey = await getPublicKey(chatData.with_user);
         const epochKeyBase64 = await unwrapEpochKey(
           wrappedKey,
-          identityPrivateKey,
+          privKey,
           peerKey.identity_pub,
         );
         await storeUnwrappedEpochKey(epochId, epochKeyBase64);
@@ -238,7 +248,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
     },
-    [identityPrivateKey],
+    [],
   );
 
   // Helper: get a usable epoch key (from cache or by unwrapping)
@@ -257,28 +267,207 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [unwrapAndCacheEpochKey],
   );
 
-  // Load messages for a chat — supports incremental fetching
+  // Decrypt a single server message and store locally
+  const decryptAndStoreMessage = useCallback(
+    async (msg: Message, chatId: number): Promise<LocalMessage> => {
+      let plaintext: string | undefined;
+
+      try {
+        // Ensure epoch key is available
+        const existingEpoch = await getEpoch(msg.epoch_id);
+        if (!existingEpoch) {
+          try {
+            const epochData = await apiFetchEpochKey(chatId, msg.epoch_id);
+            await upsertEpoch(
+              epochData.epoch_id,
+              chatId,
+              epochData.epoch_index,
+              epochData.wrapped_key,
+            );
+          } catch (error) {
+            console.error(`Failed to fetch epoch ${msg.epoch_id}:`, error);
+          }
+        }
+
+        const epochKey = await getEpochKey(msg.epoch_id, chatId);
+        if (epochKey) {
+          plaintext = await aesGcmDecrypt(msg.ciphertext, msg.nonce, epochKey);
+        }
+      } catch (e) {
+        console.error("Failed to decrypt message:", e);
+      }
+
+      const localMsg: LocalMessage = {
+        id: msg.id,
+        chat_id: chatId,
+        sender_id: msg.sender_id,
+        epoch_id: msg.epoch_id,
+        reply_id: msg.reply_id ?? null,
+        ciphertext: msg.ciphertext,
+        nonce: msg.nonce,
+        plaintext,
+        created_at: msg.created_at,
+        synced: true,
+      };
+
+      await insertMessage(localMsg);
+      return localMsg;
+    },
+    [getEpochKey],
+  );
+
+  // =============== WebSocket handler ===============
+
+  const handleWsFrame = useCallback(
+    async (frame: WsServerFrame) => {
+      const chatId = stateRef.current.currentChatId;
+      if (!chatId) return;
+
+      if (frame.type === "history") {
+        // Initial history from WS — bulk-store and display
+        const epochIdsToFetch = new Set<number>();
+        for (const msg of frame.messages) {
+          const existing = await getEpoch(msg.epoch_id);
+          if (!existing) epochIdsToFetch.add(msg.epoch_id);
+        }
+
+        // Fetch missing epoch keys in parallel
+        if (epochIdsToFetch.size > 0) {
+          await Promise.all(
+            Array.from(epochIdsToFetch).map(async (epochId) => {
+              try {
+                const epochData = await apiFetchEpochKey(chatId, epochId);
+                await upsertEpoch(
+                  epochData.epoch_id,
+                  chatId,
+                  epochData.epoch_index,
+                  epochData.wrapped_key,
+                );
+              } catch (error) {
+                console.error(`Failed to fetch epoch ${epochId}:`, error);
+              }
+            }),
+          );
+        }
+
+        for (const msg of frame.messages) {
+          await decryptAndStoreMessage(msg, chatId);
+        }
+
+        // Also re-decrypt any locally stored messages still encrypted
+        if (identityPrivateKeyRef.current) {
+          try {
+            const localMsgs = await getMessages(chatId, 50);
+            for (const msg of localMsgs) {
+              if (!msg.plaintext && msg.ciphertext) {
+                try {
+                  const epochKey = await getEpochKey(msg.epoch_id, chatId);
+                  if (epochKey) {
+                    const pt = await aesGcmDecrypt(msg.ciphertext, msg.nonce, epochKey);
+                    await updateMessagePlaintext(msg.id, pt);
+                  }
+                } catch { /* key may not be available */ }
+              }
+            }
+          } catch (error) {
+            console.error("Failed to re-decrypt local messages:", error);
+          }
+        }
+
+        // Reload from DB
+        const messages = await getMessages(chatId, 50);
+        const ordered = messages
+          .slice()
+          .sort(
+            (a, b) =>
+              new Date(a.created_at).getTime() -
+              new Date(b.created_at).getTime(),
+          );
+        dispatch({ type: "SET_MESSAGES", payload: ordered });
+      } else if (frame.type === "new_message") {
+        const localMsg = await decryptAndStoreMessage(frame.message, chatId);
+        dispatch({ type: "ADD_MESSAGE", payload: localMsg });
+
+        // Update chat list
+        await updateChatLastMessage(
+          chatId,
+          localMsg.plaintext || "[Encrypted]",
+          localMsg.created_at,
+        );
+        dispatch({
+          type: "UPDATE_CHAT",
+          payload: {
+            chat_id: chatId,
+            last_message: localMsg.plaintext || "[Encrypted]",
+            last_message_time: localMsg.created_at,
+          },
+        });
+      }
+      // pong frames are ignored
+    },
+    [decryptAndStoreMessage, getEpochKey],
+  );
+
+  // Open a chat — connect WS and load messages
+  const openChat = useCallback(
+    async (chatId: number) => {
+      dispatch({ type: "SET_CURRENT_CHAT", payload: chatId });
+      await clearUnreadCount(chatId);
+
+      // Connect WebSocket for real-time delivery
+      if (auth.isAuthenticated) {
+        chatSocket.connect(
+          chatId,
+          (frame) => {
+            handleWsFrame(frame).catch((e) =>
+              console.error("[WS] frame handler error:", e),
+            );
+          },
+          (status) => {
+            dispatch({
+              type: "SET_WS_CONNECTED",
+              payload: status === "connected",
+            });
+          },
+        );
+      }
+
+      // Also load messages from DB immediately for instant display
+      await loadMessages(chatId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [auth.isAuthenticated, handleWsFrame],
+  );
+
+  // Close current chat — disconnect WS
+  const closeChat = useCallback(() => {
+    chatSocket.disconnect();
+    dispatch({ type: "SET_CURRENT_CHAT", payload: null });
+    dispatch({ type: "SET_MESSAGES", payload: [] });
+    dispatch({ type: "SET_WS_CONNECTED", payload: false });
+  }, []);
+
+  // Load messages — REST scroll-back / pagination only
   const loadMessages = useCallback(
     async (chatId: number, beforeId?: number) => {
       dispatch({ type: "SET_LOADING_MESSAGES", payload: true });
 
       try {
-        // Fetch new messages from server (incremental for polling)
+        // For initial load or pagination, fetch via REST
         if (auth.isAuthenticated) {
           try {
-            // For incremental polling, only fetch messages after our latest local ID
-            let fetchBeforeId = beforeId;
-            const afterId = !beforeId ? await getLatestMessageId(chatId) : undefined;
+            const fetchBeforeId = beforeId;
+            const afterId = !beforeId
+              ? await getLatestMessageId(chatId)
+              : undefined;
 
             const response = await apiFetchChat(chatId, fetchBeforeId);
 
-            // Filter to only truly new messages when polling
             const newMessages = afterId
               ? response.messages.filter((m) => m.id > afterId)
               : response.messages;
 
             if (newMessages.length > 0) {
-              // Collect unique epoch IDs that need key fetching
               const epochIdsToFetch = new Set<number>();
               for (const msg of newMessages) {
                 const existingEpoch = await getEpoch(msg.epoch_id);
@@ -287,7 +476,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 }
               }
 
-              // Fetch missing epoch keys in parallel
               if (epochIdsToFetch.size > 0) {
                 await Promise.all(
                   Array.from(epochIdsToFetch).map(async (epochId) => {
@@ -300,13 +488,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                         epochData.wrapped_key,
                       );
                     } catch (error) {
-                      console.error(`Failed to fetch epoch ${epochId}:`, error);
+                      console.error(
+                        `Failed to fetch epoch ${epochId}:`,
+                        error,
+                      );
                     }
                   }),
                 );
               }
 
-              // Decrypt and store new messages
               for (const msg of newMessages) {
                 let plaintext: string | undefined;
 
@@ -328,6 +518,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   chat_id: chatId,
                   sender_id: msg.sender_id,
                   epoch_id: msg.epoch_id,
+                  reply_id: msg.reply_id ?? null,
                   ciphertext: msg.ciphertext,
                   nonce: msg.nonce,
                   plaintext,
@@ -341,8 +532,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        // Also try to decrypt any locally stored messages that are still encrypted
-        if (identityPrivateKey) {
+        // Re-decrypt any locally stored messages that are still encrypted
+        if (identityPrivateKeyRef.current) {
           try {
             const localMsgs = await getMessages(chatId, 50, beforeId);
             for (const msg of localMsgs) {
@@ -350,12 +541,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 try {
                   const epochKey = await getEpochKey(msg.epoch_id, chatId);
                   if (epochKey) {
-                    const plaintext = await aesGcmDecrypt(
+                    const pt = await aesGcmDecrypt(
                       msg.ciphertext,
                       msg.nonce,
                       epochKey,
                     );
-                    await updateMessagePlaintext(msg.id, plaintext);
+                    await updateMessagePlaintext(msg.id, pt);
                   }
                 } catch {
                   // Decryption may fail if key is unavailable
@@ -383,12 +574,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_LOADING_MESSAGES", payload: false });
       }
     },
-    [auth.isAuthenticated, identityPrivateKey, getEpochKey],
+    [auth.isAuthenticated, getEpochKey],
   );
 
-  // Send a message
+  // Send a message (with optional reply)
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, replyId?: number | null) => {
       if (!state.currentChatId) {
         throw new Error("No chat selected");
       }
@@ -404,33 +595,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Get or create epoch
         let epochData = await getLatestEpoch(chatId);
 
-        // If no local epoch, or the local epoch has no unwrapped key, try to
-        // fetch the latest from the server first
         if (!epochData || (!epochData.unwrapped_key && !identityPrivateKey)) {
           // Fall through to epoch creation below
         }
 
         if (!epochData) {
-          // Need to create a new epoch
           const chat = state.chats.find((c) => c.chat_id === chatId);
           if (!chat) throw new Error("Chat not found");
 
-          // Get peer's public key
           const peerKey = await getPublicKey(chat.with_user);
-
-          // Generate new epoch key
           const epochKeyBase64 = await generateAESKey();
 
-          // Wrap for both parties — ECDH is symmetric:
-          // ECDH(A_priv, B_pub) == ECDH(B_priv, A_pub)
-          // So the same wrapped blob works for both parties
           const wrappedKey = await wrapEpochKey(
             epochKeyBase64,
             identityPrivateKey,
             peerKey.identity_pub,
           );
 
-          // Create epoch on server (retry on throttle)
           let epochResponse;
           try {
             epochResponse = await apiCreateEpoch(chatId, {
@@ -439,7 +620,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
           } catch (err: any) {
             if (err?.status === 429 || err?.message?.includes("throttled")) {
-              // Wait for throttle to expire and retry once
               await new Promise((r) => setTimeout(r, 5500));
               epochResponse = await apiCreateEpoch(chatId, {
                 wrapped_key_a: wrappedKey,
@@ -450,7 +630,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
-          // Store epoch locally with unwrapped key
           await upsertEpoch(
             epochResponse.epoch_id,
             chatId,
@@ -464,8 +643,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         if (!epochData) throw new Error("Failed to get epoch");
 
-        // Get epoch key
-        let epochKeyBase64 = await getEpochKey(epochData.epoch_id, chatId);
+        const epochKeyBase64 = await getEpochKey(epochData.epoch_id, chatId);
 
         if (!epochKeyBase64) {
           throw new Error("Cannot decrypt epoch key");
@@ -474,19 +652,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Encrypt message
         const encrypted = await aesGcmEncrypt(text, epochKeyBase64);
 
-        // Send to server
+        // Send to server (the server will broadcast via WS)
         const response = await apiSendMessage(chatId, {
           epoch_id: epochData.epoch_id,
           ciphertext: encrypted.ciphertext,
           nonce: encrypted.nonce,
+          reply_id: replyId ?? undefined,
         });
 
-        // Store locally
+        // Store locally immediately (WS broadcast will deduplicate)
         const localMessage: LocalMessage = {
           id: response.id,
           chat_id: chatId,
           sender_id: auth.userId!,
           epoch_id: response.epoch_id,
+          reply_id: replyId ?? null,
           ciphertext: encrypted.ciphertext,
           nonce: encrypted.nonce,
           plaintext: text,
@@ -533,17 +713,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.isAuthenticated]);
 
+  // Disconnect WS when auth changes
   useEffect(() => {
-    if (!state.currentChatId) return;
-    const chatId = state.currentChatId;
-    const intervalId = setInterval(() => {
-      loadMessages(chatId).catch((error) => {
-        console.error("Polling failed:", error);
-      });
-    }, 3000);
-
-    return () => clearInterval(intervalId);
-  }, [state.currentChatId, loadMessages]);
+    if (!auth.isAuthenticated) {
+      chatSocket.disconnect();
+    }
+  }, [auth.isAuthenticated]);
 
   const value: ChatContextValue = {
     ...state,

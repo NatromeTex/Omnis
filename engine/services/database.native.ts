@@ -32,6 +32,7 @@ export async function initDatabase(): Promise<void> {
       chat_id INTEGER NOT NULL,
       sender_id INTEGER NOT NULL,
       epoch_id INTEGER NOT NULL,
+      reply_id INTEGER,
       ciphertext TEXT NOT NULL,
       nonce TEXT NOT NULL,
       plaintext TEXT,
@@ -53,6 +54,15 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_epochs_chat_id ON epochs(chat_id);
   `);
+
+  // Migrate: add reply_id column if missing (existing installs)
+  try {
+    await db.runAsync(
+      `ALTER TABLE messages ADD COLUMN reply_id INTEGER`,
+    );
+  } catch {
+    // Column already exists — ignore
+  }
 }
 
 /**
@@ -153,13 +163,14 @@ export async function clearUnreadCount(chatId: number): Promise<void> {
 export async function insertMessage(message: LocalMessage): Promise<void> {
   const database = getDb();
   await database.runAsync(
-    `INSERT OR REPLACE INTO messages (id, chat_id, sender_id, epoch_id, ciphertext, nonce, plaintext, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_id, sender_id, epoch_id, reply_id, ciphertext, nonce, plaintext, created_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.id,
       message.chat_id,
       message.sender_id,
       message.epoch_id,
+      message.reply_id ?? null,
       message.ciphertext,
       message.nonce,
       message.plaintext ?? null,
@@ -167,6 +178,18 @@ export async function insertMessage(message: LocalMessage): Promise<void> {
       message.synced ? 1 : 0,
     ],
   );
+}
+
+/**
+ * Get a single message by ID
+ */
+export async function getMessage(messageId: number): Promise<LocalMessage | null> {
+  const database = getDb();
+  const row = await database.getFirstAsync<LocalMessage>(
+    `SELECT * FROM messages WHERE id = ?`,
+    [messageId],
+  );
+  return row;
 }
 
 /**

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Omnis",
     "slug": "Omnis",
-    "version": "0.8.1-alpha",
+    "version": "0.9.0-alpha",
     "orientation": "portrait",
     "icon": "./engine/assets/icon.png",
     "scheme": "omnis",

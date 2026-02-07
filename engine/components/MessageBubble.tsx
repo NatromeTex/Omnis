@@ -7,12 +7,19 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { Colors } from "../theme";
+import { ReplyPreview } from "./ReplyPreview";
 
 interface MessageBubbleProps {
   message: string;
   timestamp: string;
   isSent: boolean;
   index?: number;
+  /** Text of the replied-to message */
+  replyText?: string | null;
+  /** Sender name of the replied-to message */
+  replySender?: string | null;
+  /** Callback when the reply preview is tapped */
+  onReplyPress?: () => void;
 }
 
 export function MessageBubble({
@@ -20,6 +27,9 @@ export function MessageBubble({
   timestamp,
   isSent,
   index = 0,
+  replyText,
+  replySender,
+  onReplyPress,
 }: MessageBubbleProps) {
   const formatTime = (timeString: string) => {
     const date = new Date(timeString);
@@ -40,6 +50,14 @@ export function MessageBubble({
           isSent ? styles.bubbleSent : styles.bubbleReceived,
         ]}
       >
+        {replyText ? (
+          <ReplyPreview
+            replyText={replyText}
+            replySender={replySender ?? undefined}
+            isSent={isSent}
+            onPress={onReplyPress}
+          />
+        ) : null}
         <Text style={styles.message}>{message}</Text>
         <Text style={styles.timestamp}>{formatTime(timestamp)}</Text>
       </View>

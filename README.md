@@ -1,4 +1,4 @@
-# Omnis (0.8.1-alpha)
+# Omnis (0.9.0-alpha)
 
 [![My Skills](https://skillicons.dev/icons?i=ts,react)](https://skillicons.dev) <br>
 

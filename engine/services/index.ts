@@ -14,6 +14,7 @@ export {
     getEpoch,
     getLatestEpoch,
     getLatestMessageId,
+    getMessage,
     getMessages,
     getUnsyncedMessages,
     initDatabase,
@@ -28,4 +29,5 @@ export {
     upsertEpoch
 } from "./database";
 export * from "./storage";
+export { chatSocket } from "./websocket";
 
