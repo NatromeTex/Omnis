@@ -15,8 +15,8 @@
     "android": {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.omnis.app",
-      "usesCleartextTraffic": true
+      "softwareKeyboardLayoutMode": "resize",
+      "package": "com.omnis.app"
     },
     "web": {
       "output": "static"

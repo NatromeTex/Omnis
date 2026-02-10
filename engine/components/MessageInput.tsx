@@ -105,7 +105,7 @@ export function MessageInput({
           <Ionicons
             name="send"
             size={20}
-            color={canSend ? Colors.background : Colors.textMuted}
+            color={canSend ? Colors.accentDark : Colors.textMuted}
           />
         </AnimatedPressable>
       </View>
@@ -115,13 +115,11 @@ export function MessageInput({
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: Colors.background,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    backgroundColor: Colors.transparent,
   },
   container: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     padding: 8,
     gap: 8,
   },

@@ -41,7 +41,6 @@ export const ENDPOINTS = {
   REVOKE_OTHER_SESSIONS: "/users/sessions/revoke_other",
 
   // User Public Key
-  PUBLISH_PKEY: "/user/pkey/publish",
   GET_PKEY: "/user/pkey/get",
 
   // Chat

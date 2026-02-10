@@ -121,10 +121,6 @@ export function initLogCapture() {
   };
 }
 
-export function getLogEntries(): LogEntry[] {
-  return entries.slice();
-}
-
 export function getLogText(): string {
   return entries
     .map((entry) => {

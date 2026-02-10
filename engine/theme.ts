@@ -8,6 +8,7 @@ export const Colors = {
   background: "#000000",
   surface: "#121212",
   surfaceVariant: "#1E1E1E",
+  transparent: "#00000000",
 
   // Accent colors
   accent: "#96ACB7",
@@ -25,8 +26,8 @@ export const Colors = {
   warning: "#FFB74D",
 
   // Message colors
-  messageSent: "#303030",
-  messageReceived: "#1E1E1E",
+  messageSent: "#181818",
+  messageReceived: "#252525",
 };
 
 export const Spacing = {

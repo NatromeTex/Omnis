@@ -41,19 +41,7 @@ const THEME_COLORS = [
 ];
 
 const LOADING_PHRASES = [
-  "Generating quantum-resistant keys...",
-  "Consulting the crypto gods...",
-  "Shuffling the bits around...",
-  "Encrypting your secrets...",
-  "Teaching electrons to dance...",
-  "Initializing flux capacitor...",
-  "Reticulating splines...",
-  "Compiling your identity...",
-  "Negotiating with the server...",
   "Handshaking with TLS...",
-  "Deploying encryption gremlins...",
-  "Spinning up the hamster wheel...",
-  "Converting caffeine to code...",
   "Asking nicely for permissions...",
   "Bribing the firewall...",
 ];
@@ -63,10 +51,7 @@ const LOGIN_PHRASES = [
   "Waking up the server...",
   "Verifying your existence...",
   "Checking if you're a robot...",
-  "Unlocking the secrets...",
-  "Authenticating vibes...",
   "Finding your keys...",
-  "Summoning your session...",
 ];
 
 type AuthMode = "welcome" | "login" | "signup";
@@ -313,6 +298,8 @@ export function OnboardingScreen() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
               containerStyle={styles.input}
             />
 
@@ -323,6 +310,8 @@ export function OnboardingScreen() {
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
                 containerStyle={styles.input}
               />
             )}

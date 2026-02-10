@@ -1,14 +1,10 @@
-/**
- * Chat Screen
- * Individual chat conversation view with swipe-to-reply
- */
-
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
     FlatList,
+    Keyboard,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -38,10 +34,6 @@ interface ChatScreenProps {
   onOpenProfile: () => void;
 }
 
-/**
- * Individual swipeable message row.
- * Swiping right reveals a reply icon and triggers onSwipeReply.
- */
 function SwipeableMessageRow({
   item,
   index,
@@ -66,7 +58,6 @@ function SwipeableMessageRow({
     .activeOffsetX(20)
     .failOffsetY([-10, 10])
     .onUpdate((event) => {
-      // Only allow swiping right
       const tx = Math.max(0, Math.min(event.translationX, 80));
       translateX.value = tx;
       iconOpacity.value = tx > 30 ? 1 : tx / 30;
@@ -120,6 +111,7 @@ export function ChatScreen({
   const flatListRef = useRef<FlatList>(null);
   const { auth } = useApp();
   const { messages, isSending, openChat, closeChat, sendMessage } = useChat();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   // Reply state
   const [replyTo, setReplyTo] = useState<LocalMessage | null>(null);
@@ -156,6 +148,20 @@ export function ChatScreen({
     return () => closeChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      setIsKeyboardVisible(true);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Swipe right to go back (screen-level gesture)
   const backSwipeGesture = Gesture.Pan()
@@ -284,7 +290,7 @@ export function ChatScreen({
       <KeyboardAvoidingView
         style={[styles.container, { paddingTop: insets.top }]}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -335,7 +341,8 @@ export function ChatScreen({
         <MessageInput
           onSend={handleSend}
           disabled={isSending}
-          bottomInset={insets.bottom}
+          bottomInset={isKeyboardVisible ? 0 : insets.bottom}
+          isKeyboardVisible={isKeyboardVisible}
           replyTo={replyTo}
           replyToSender={replyToSender}
           onCancelReply={handleCancelReply}

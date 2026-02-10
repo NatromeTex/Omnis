@@ -2,7 +2,7 @@ FROM node:20-bullseye
 
 # ---------------- Java ----------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jdk wget unzip git ca-certificates \
+    openjdk-17-jdk wget unzip git ca-certificates ccache \
  && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -26,6 +26,11 @@ RUN sdkmanager \
 
 # ---------------- Gradle ----------------
 ENV GRADLE_USER_HOME=/opt/gradle-cache
+
+# ---------------- ccache ----------------
+ENV USE_CCACHE=1
+ENV CCACHE_DIR=/root/.ccache
+ENV CCACHE_MAXSIZE=20G
 
 # ---------------- App ----------------
 WORKDIR /app

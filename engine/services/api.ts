@@ -1,9 +1,4 @@
-/**
- * API Service
- * Handles all communication with the Omnis backend
- */
-
-import { ENDPOINTS } from "../constants";
+import { APP_VERSION, ENDPOINTS } from "../constants";
 import type {
     Chat,
     ChatFetchResponse,
@@ -20,6 +15,7 @@ import type {
 } from "../types";
 import { clearAllData } from "./database";
 import { getApiBaseUrl, getAuthToken, getDeviceId, clearAuthToken, clearCurrentUser } from "./storage";
+import { Platform } from "react-native";
 
 class ApiError extends Error {
   status: number;
@@ -37,9 +33,6 @@ function normalizeUtcTimestamp(value?: string | null): string | null {
   return `${value}Z`;
 }
 
-/**
- * Make an API request
- */
 async function request<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -50,6 +43,7 @@ async function request<T>(
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "User-Agent": `Omnis/${APP_VERSION} (Android ${Platform.Version})`,
     ...(options.headers as Record<string, string>),
   };
 
@@ -79,7 +73,6 @@ async function request<T>(
         errorText || `Request failed with status ${response.status}`;
     }
 
-    // If auth is broken (401 Unauthorized), clear local database to prevent data leaks
     if (response.status === 401 && requiresAuth) {
       console.warn("[API] Auth broken, clearing local database for security");
       try {
@@ -98,10 +91,6 @@ async function request<T>(
 }
 
 // ============ Auth API ============
-
-/**
- * Sign up a new user
- */
 export async function signup(data: SignupRequest): Promise<User> {
   return request<User>(
     ENDPOINTS.SIGNUP,
@@ -113,9 +102,6 @@ export async function signup(data: SignupRequest): Promise<User> {
   );
 }
 
-/**
- * Login user
- */
 export async function login(data: LoginRequest): Promise<LoginResponse> {
   const deviceId = await getDeviceId();
 
@@ -132,34 +118,21 @@ export async function login(data: LoginRequest): Promise<LoginResponse> {
   );
 }
 
-/**
- * Logout user
- */
 export async function logout(): Promise<{ status: string }> {
   return request<{ status: string }>(ENDPOINTS.LOGOUT, {
     method: "POST",
   });
 }
 
-/**
- * Get current user info
- */
 export async function getMe(): Promise<User> {
   return request<User>(ENDPOINTS.ME);
 }
 
-/**
- * Get user's key blob
- */
 export async function getKeyBlob(): Promise<KeyBlob> {
   return request<KeyBlob>(ENDPOINTS.KEYBLOB);
 }
 
 // ============ Session API ============
-
-/**
- * Get all sessions
- */
 export async function getSessions(): Promise<Session[]> {
   const sessions = await request<Session[]>(ENDPOINTS.SESSIONS);
   return sessions.map((session) => ({
@@ -171,9 +144,6 @@ export async function getSessions(): Promise<Session[]> {
   }));
 }
 
-/**
- * Revoke a specific session
- */
 export async function revokeSession(
   sessionId: number,
 ): Promise<{ status: string }> {
@@ -185,9 +155,6 @@ export async function revokeSession(
   );
 }
 
-/**
- * Revoke all other sessions
- */
 export async function revokeOtherSessions(): Promise<{ status: string }> {
   return request<{ status: string }>(ENDPOINTS.REVOKE_OTHER_SESSIONS, {
     method: "DELETE",
@@ -195,25 +162,6 @@ export async function revokeOtherSessions(): Promise<{ status: string }> {
 }
 
 // ============ Public Key API ============
-
-/**
- * Publish identity key material
- */
-export async function publishPublicKey(data: {
-  identity_pub: string;
-  encrypted_identity_priv: string;
-  kdf_salt: string;
-  aead_nonce: string;
-}): Promise<{ status: string }> {
-  return request<{ status: string }>(ENDPOINTS.PUBLISH_PKEY, {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-/**
- * Get user's public key by username
- */
 export async function getPublicKey(username: string): Promise<{
   username: string;
   identity_pub: string;
@@ -226,17 +174,10 @@ export async function getPublicKey(username: string): Promise<{
 }
 
 // ============ Chat API ============
-
-/**
- * List all chats
- */
 export async function listChats(): Promise<Chat[]> {
   return request<Chat[]>(ENDPOINTS.CHAT_LIST);
 }
 
-/**
- * Create a new chat
- */
 export async function createChat(
   username: string,
 ): Promise<{ chat_id: number }> {
@@ -246,9 +187,6 @@ export async function createChat(
   });
 }
 
-/**
- * Fetch chat messages
- */
 export async function fetchChat(
   chatId: number,
   beforeId?: number,
@@ -268,9 +206,6 @@ export async function fetchChat(
   };
 }
 
-/**
- * Create a new epoch
- */
 export async function createEpoch(
   chatId: number,
   data: CreateEpochRequest,
@@ -282,10 +217,6 @@ export async function createEpoch(
   });
 }
 
-/**
- * Fetch epoch key for a specific epoch
- * Used for on-demand epoch key fetching when keys are not included in chat fetch response
- */
 export async function fetchEpochKey(
   chatId: number,
   epochId: number,
@@ -296,9 +227,6 @@ export async function fetchEpochKey(
   return request<EpochFetchResponse>(endpoint);
 }
 
-/**
- * Send a message
- */
 export async function sendMessage(
   chatId: number,
   data: SendMessageRequest,
@@ -324,9 +252,6 @@ export async function sendMessage(
   };
 }
 
-/**
- * Health check
- */
 export async function healthCheck(): Promise<{ PING: string }> {
   const baseUrl = await getApiBaseUrl();
   const response = await fetch(`${baseUrl}/`);

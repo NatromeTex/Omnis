@@ -1,9 +1,3 @@
-/*
- * Cryptographic utilities for Omnis
- * Uses @noble libraries for cross-platform compatibility (React Native + Web)
- * Matches the encryption used in web.js frontend
- */
-
 import { p384 } from "@noble/curves/nist.js";
 import { gcm } from "@noble/ciphers/aes.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
@@ -76,10 +70,6 @@ export function hexToBytes(hex: string): Uint8Array {
 }
 
 // ==================== RANDOM GENERATION ====================
-
-/**
- * Generate random bytes
- */
 function generateRandomBytes(length: number): Uint8Array {
   const webCrypto = getWebCrypto();
   if (webCrypto) {
@@ -90,40 +80,23 @@ function generateRandomBytes(length: number): Uint8Array {
   return randomBytes(length);
 }
 
-/**
- * Generate a random UUID v4
- */
 export function generateUUID(): string {
   return uuidv4();
 }
 
-/**
- * Generate a 12-byte random nonce for AES-GCM
- */
 function generateNonce(): Uint8Array {
   return generateRandomBytes(AES_NONCE_LENGTH);
 }
 
-/**
- * Generate a 32-byte random salt for PBKDF2
- */
 function generateSalt(): Uint8Array {
   return generateRandomBytes(PBKDF2_SALT_LENGTH);
 }
 
-/**
- * Generate a 256-bit (32-byte) random key for AES-GCM
- */
 export async function generateAESKey(): Promise<string> {
   return bytesToBase64(generateRandomBytes(AES_KEY_LENGTH));
 }
 
 // ==================== KEY DERIVATION ====================
-
-/**
- * Derive key from password using PBKDF2-SHA256
- * Returns raw key bytes
- */
 async function deriveKeyFromPassword(
   password: string,
   salt: Uint8Array,
@@ -164,7 +137,6 @@ export interface KeyPair {
   privateKey: string; // base64 PKCS8
 }
 
-// SPKI header for P-384 public key (DER encoding prefix)
 const SPKI_HEADER = new Uint8Array([
   0x30, 0x76, // SEQUENCE, length 118
   0x30, 0x10, // SEQUENCE, length 16
@@ -173,7 +145,6 @@ const SPKI_HEADER = new Uint8Array([
   0x03, 0x62, 0x00, // BIT STRING, length 98, no unused bits
 ]);
 
-// PKCS8 header for P-384 private key (DER encoding prefix)
 const PKCS8_HEADER = new Uint8Array([
   0x30, 0x81, 0xb6, // SEQUENCE, length 182
   0x02, 0x01, 0x00, // INTEGER, version 0
@@ -183,9 +154,6 @@ const PKCS8_HEADER = new Uint8Array([
   0x04, 0x81, 0x9e, // OCTET STRING, length 158
 ]);
 
-/**
- * Convert raw P-384 public key (97 bytes uncompressed) to SPKI format
- */
 function publicKeyToSPKI(rawPublicKey: Uint8Array): Uint8Array {
   const spki = new Uint8Array(SPKI_HEADER.length + rawPublicKey.length);
   spki.set(SPKI_HEADER, 0);
@@ -193,12 +161,7 @@ function publicKeyToSPKI(rawPublicKey: Uint8Array): Uint8Array {
   return spki;
 }
 
-/**
- * Convert raw P-384 private key (48 bytes) to standard PKCS8 format
- * Produces valid DER encoding compatible with WebCrypto's exportKey('pkcs8')
- */
 function privateKeyToPKCS8(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array {
-  // ECPrivateKey structure (will be wrapped in OCTET STRING by PKCS8_HEADER)
   const ecPrivateKey = new Uint8Array([
     0x30, 0x81, 0x9b, // SEQUENCE, length 155
     0x02, 0x01, 0x01, // INTEGER, version 1
@@ -208,42 +171,24 @@ function privateKeyToPKCS8(privateKey: Uint8Array, publicKey: Uint8Array): Uint8
     0x03, 0x62, 0x00, // BIT STRING, length 98, no unused bits
     ...publicKey,
   ]);
-  
-  // Standard PKCS8: HEADER (includes OCTET STRING wrapper tag) + ECPrivateKey
   const pkcs8 = new Uint8Array(PKCS8_HEADER.length + ecPrivateKey.length);
   pkcs8.set(PKCS8_HEADER, 0);
   pkcs8.set(ecPrivateKey, PKCS8_HEADER.length);
   return pkcs8;
 }
 
-/**
- * Extract raw public key (97 bytes) from SPKI format
- */
 function spkiToPublicKey(spki: Uint8Array): Uint8Array {
   // Skip the SPKI header to get the raw public key
   return spki.slice(SPKI_HEADER.length);
 }
 
-/**
- * Extract raw private key (48 bytes) from PKCS8 format
- * Handles both standard PKCS8 (from WebCrypto) and legacy app format
- */
 function pkcs8ToPrivateKey(pkcs8: Uint8Array): Uint8Array {
-  // Standard PKCS8 (185 bytes): HEADER(27) + SEQUENCE(3) + version(3) + OCTET_STRING_tag(2) + key(48) + ...
-  // Legacy format (182 bytes): HEADER(27)-3 overlap, private key at offset 32
   if (pkcs8.length >= 185 && pkcs8[24] === 0x04) {
-    // Standard PKCS8: OCTET STRING at byte 24 wraps ECPrivateKey
-    // Skip: HEADER(27) + SEQUENCE_tag(3) + version(3) + OCTET_STRING_tag(2) = 35
     return pkcs8.slice(35, 35 + 48);
   }
-  // Legacy app format (no OCTET STRING wrapper, SEQUENCE directly at byte 24)
-  // Skip: 24 + SEQUENCE_tag(3) + version(3) + OCTET_STRING_tag(2) = 32
   return pkcs8.slice(32, 32 + 48);
 }
 
-/**
- * Generate EC identity keypair (P-384) for ECDH
- */
 export async function generateIdentityKeyPair(): Promise<KeyPair> {
   const webCrypto = getWebCrypto();
   if (webCrypto) {
@@ -279,9 +224,6 @@ export interface EncryptedData {
   nonce: string; // base64
 }
 
-/**
- * Encrypt data with AES-GCM
- */
 async function encryptAESGCM(
   key: Uint8Array,
   plaintext: Uint8Array,
@@ -308,9 +250,6 @@ async function encryptAESGCM(
   return aes.encrypt(plaintext);
 }
 
-/**
- * Decrypt data with AES-GCM
- */
 async function decryptAESGCM(
   key: Uint8Array,
   ciphertext: Uint8Array,
@@ -337,9 +276,6 @@ async function decryptAESGCM(
   return aes.decrypt(ciphertext);
 }
 
-/**
- * Encrypt a message with epoch key (raw bytes)
- */
 export async function aesGcmEncrypt(
   plaintext: string,
   epochKeyBase64: string,
@@ -356,9 +292,6 @@ export async function aesGcmEncrypt(
   };
 }
 
-/**
- * Decrypt a message with epoch key (raw bytes)
- */
 export async function aesGcmDecrypt(
   ciphertextBase64: string,
   nonceBase64: string,
@@ -375,10 +308,6 @@ export async function aesGcmDecrypt(
 
 // ==================== IDENTITY KEY ENCRYPTION ====================
 
-/**
- * Encrypt identity private key with password
- * Matches web.js encryptIdentityPrivateKey
- */
 export async function encryptIdentityPrivateKey(
   privateKeyBase64: string,
   password: string,
@@ -398,10 +327,6 @@ export async function encryptIdentityPrivateKey(
   };
 }
 
-/**
- * Decrypt identity private key with password
- * Matches web.js decryptIdentityPrivateKey
- */
 export async function decryptIdentityPrivateKey(
   encryptedPrivateKey: string,
   saltBase64: string,
@@ -421,22 +346,12 @@ export async function decryptIdentityPrivateKey(
 
 // ==================== EPOCH KEY WRAPPING ====================
 
-/**
- * Derive ECDH shared secret and wrapping key
- */
 async function deriveWrappingKey(
   myPrivateKeyBytes: Uint8Array,
   peerPublicKeyBytes: Uint8Array,
 ): Promise<Uint8Array> {
-  // Derive shared secret using ECDH (P-384)
   const sharedSecret = p384.getSharedSecret(myPrivateKeyBytes, peerPublicKeyBytes);
-
-  // The shared secret from noble is the full point (x, y coordinates)
-  // We need just the x-coordinate (first 48 bytes after the 0x04 prefix for uncompressed)
-  // For P-384, shared secret is 97 bytes uncompressed, we take bytes 1-49 (x-coordinate)
   const sharedX = sharedSecret.slice(1, 49); // 48 bytes = 384 bits
-
-  // Use HKDF to derive a wrapping key from shared secret
   const wrapKey = hkdf(
     sha256,
     sharedX,
@@ -495,10 +410,6 @@ async function deriveWrappingKeyWebCrypto(
   return toUint8Array(wrapBits);
 }
 
-/**
- * Wrap an epoch key for a recipient
- * Matches web.js wrapEpochKeyForRecipient
- */
 export async function wrapEpochKey(
   epochKeyBase64: string,
   myPrivateKeyBase64: string,
@@ -515,12 +426,10 @@ export async function wrapEpochKey(
         spkiToPublicKey(peerPublicKeySPKI),
       );
 
-  // Wrap the epoch key
   const epochKey = base64ToBytes(epochKeyBase64);
   const nonce = generateNonce();
   const wrapped = await encryptAESGCM(wrapKey, epochKey, nonce);
 
-  // Return nonce + wrapped key concatenated
   const result = new Uint8Array(nonce.length + wrapped.length);
   result.set(nonce, 0);
   result.set(wrapped, nonce.length);
@@ -528,10 +437,6 @@ export async function wrapEpochKey(
   return bytesToBase64(result);
 }
 
-/**
- * Unwrap an epoch key received from sender
- * Matches web.js unwrapEpochKey
- */
 export async function unwrapEpochKey(
   wrappedKeyBase64: string,
   myPrivateKeyBase64: string,
@@ -552,23 +457,7 @@ export async function unwrapEpochKey(
         spkiToPublicKey(senderPublicKeySPKI),
       );
 
-  // Unwrap the epoch key
   const rawEpochKey = await decryptAESGCM(wrapKey, wrapped, nonce);
 
   return bytesToBase64(rawEpochKey);
-}
-
-// ==================== HASHING ====================
-
-/**
- * SHA-256 hash
- */
-export async function sha256Hash(dataBase64: string): Promise<string> {
-  const data = base64ToBytes(dataBase64);
-  const webCrypto = getWebCrypto();
-  if (webCrypto) {
-    const digest = await webCrypto.subtle.digest("SHA-256", data);
-    return bytesToBase64(toUint8Array(digest));
-  }
-  return bytesToBase64(sha256(data));
 }
