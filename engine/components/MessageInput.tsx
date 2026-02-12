@@ -1,6 +1,8 @@
 /**
  * MessageInput Component
- * Text input for composing messages
+ * Text input and send button for composing messages.
+ * No inset or keyboard handling — that is the parent's job
+ * (SafeAreaView for nav-bar space, adjustResize for keyboard).
  */
 
 import { Ionicons } from "@expo/vector-icons";
@@ -14,19 +16,10 @@ import Animated, {
 } from "react-native-reanimated";
 import { MAX_MESSAGE_LENGTH } from "../constants";
 import { Colors } from "../theme";
-import type { LocalMessage } from "../types";
-import { ReplyPreview } from "./ReplyPreview";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
-  bottomInset?: number;
-  /** The message being replied to */
-  replyTo?: LocalMessage | null;
-  /** Display name of the reply message sender */
-  replyToSender?: string | null;
-  /** Called when user dismisses the reply */
-  onCancelReply?: () => void;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -34,10 +27,6 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 export function MessageInput({
   onSend,
   disabled = false,
-  bottomInset = 0,
-  replyTo,
-  replyToSender,
-  onCancelReply,
 }: MessageInputProps) {
   const [message, setMessage] = useState("");
   const scale = useSharedValue(1);
@@ -66,76 +55,59 @@ export function MessageInput({
   const canSend = message.trim().length > 0 && !disabled;
 
   return (
-    <View
-      style={[styles.wrapper, { paddingBottom: Math.max(bottomInset, 8) }]}
-    >
-      {replyTo ? (
-        <ReplyPreview
-          replyText={replyTo.plaintext || "[Encrypted]"}
-          replySender={replyToSender ?? undefined}
-          onDismiss={onCancelReply}
-          isInputBar
+    <View style={styles.container}>
+      <TextInput
+        style={styles.input}
+        value={message}
+        onChangeText={setMessage}
+        placeholder="Message"
+        placeholderTextColor={Colors.textMuted}
+        multiline
+        scrollEnabled
+        maxLength={MAX_MESSAGE_LENGTH}
+        editable={!disabled}
+        selectionColor={Colors.accent}
+      />
+
+      <AnimatedPressable
+        style={[
+          styles.sendButton,
+          canSend && styles.sendButtonActive,
+          animatedButtonStyle,
+        ]}
+        onPress={handleSend}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={!canSend}
+      >
+        <Ionicons
+          name="send"
+          size={20}
+          color={canSend ? Colors.accentDark : Colors.textMuted}
         />
-      ) : null}
-      <View style={styles.container}>
-        <View style={styles.inputContainer}>
-          <TextInput
-            style={styles.input}
-            value={message}
-            onChangeText={setMessage}
-            placeholder="Message"
-            placeholderTextColor={Colors.textMuted}
-            multiline
-            maxLength={MAX_MESSAGE_LENGTH}
-            editable={!disabled}
-            selectionColor={Colors.accent}
-          />
-        </View>
-        <AnimatedPressable
-          style={[
-            styles.sendButton,
-            canSend && styles.sendButtonActive,
-            animatedButtonStyle,
-          ]}
-          onPress={handleSend}
-          onPressIn={handlePressIn}
-          onPressOut={handlePressOut}
-          disabled={!canSend}
-        >
-          <Ionicons
-            name="send"
-            size={20}
-            color={canSend ? Colors.accentDark : Colors.textMuted}
-          />
-        </AnimatedPressable>
-      </View>
+      </AnimatedPressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    backgroundColor: Colors.transparent,
-  },
   container: {
     flexDirection: "row",
-    alignItems: "center",
-    padding: 8,
+    alignItems: "flex-end",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     gap: 8,
   },
-  inputContainer: {
+  input: {
     flex: 1,
     backgroundColor: Colors.surface,
-    borderRadius: 24,
+    borderRadius: 999,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    maxHeight: 120,
-  },
-  input: {
+    paddingVertical: 10,
     color: Colors.textPrimary,
     fontSize: 16,
-    maxHeight: 100,
-    minHeight: 24,
+    minHeight: 44,
+    maxHeight: 44,
   },
   sendButton: {
     width: 44,

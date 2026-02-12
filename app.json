@@ -13,7 +13,7 @@
       "bundleIdentifier": "com.omnis.app"
     },
     "android": {
-      "edgeToEdgeEnabled": true,
+      "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "package": "com.omnis.app"

@@ -4,9 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
     FlatList,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
+  LayoutChangeEvent,
     Pressable,
     StyleSheet,
     Text,
@@ -21,8 +19,8 @@ import Animated, {
     withSpring,
     withTiming,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Avatar, MessageBubble, MessageInput } from "../components";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Avatar, MessageBubble, MessageInput, ReplyPreview } from "../components";
 import { useApp, useChat } from "../context";
 import { Colors } from "../theme";
 import type { LocalMessage } from "../types";
@@ -107,14 +105,19 @@ export function ChatScreen({
   onBack,
   onOpenProfile,
 }: ChatScreenProps) {
-  const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList>(null);
   const { auth } = useApp();
   const { messages, isSending, openChat, closeChat, sendMessage } = useChat();
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   // Reply state
   const [replyTo, setReplyTo] = useState<LocalMessage | null>(null);
+
+  // Composer (reply preview + input) height for bottom padding + overlap
+  const [composerHeight, setComposerHeight] = useState(72);
+  const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
+    const next = Math.ceil(event.nativeEvent.layout.height);
+    setComposerHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+  }, []);
 
   // Build a lookup map: message id → LocalMessage (for reply previews)
   const messageMap = useMemo(() => {
@@ -149,19 +152,7 @@ export function ChatScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
-  useEffect(() => {
-    const showSub = Keyboard.addListener("keyboardDidShow", () => {
-      setIsKeyboardVisible(true);
-    });
-    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
-      setIsKeyboardVisible(false);
-    });
 
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
 
   // Swipe right to go back (screen-level gesture)
   const backSwipeGesture = Gesture.Pan()
@@ -287,11 +278,8 @@ export function ChatScreen({
 
   return (
     <GestureDetector gesture={backSwipeGesture}>
-      <KeyboardAvoidingView
-        style={[styles.container, { paddingTop: insets.top }]}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
-      >
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+        <View style={styles.flex}>
         {/* Header */}
         <View style={styles.header}>
           <Pressable onPress={handleBack} style={styles.backButton}>
@@ -317,6 +305,7 @@ export function ChatScreen({
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={[
             styles.messagesContent,
+            { paddingBottom: composerHeight + 12 },
             orderedMessages.length === 0 && styles.messagesContentEmpty,
           ]}
           ListEmptyComponent={renderEmpty}
@@ -337,17 +326,24 @@ export function ChatScreen({
           }}
         />
 
-        {/* Message Input */}
-        <MessageInput
-          onSend={handleSend}
-          disabled={isSending}
-          bottomInset={isKeyboardVisible ? 0 : insets.bottom}
-          isKeyboardVisible={isKeyboardVisible}
-          replyTo={replyTo}
-          replyToSender={replyToSender}
-          onCancelReply={handleCancelReply}
-        />
-      </KeyboardAvoidingView>
+        {/* Floating composer (no absolute; overlaps via negative margin) */}
+        <View
+          onLayout={handleComposerLayout}
+          style={[styles.composer, { marginTop: -composerHeight }]}
+        >
+          {replyTo ? (
+            <ReplyPreview
+              replyText={replyTo.plaintext || "[Encrypted]"}
+              replySender={replyToSender ?? undefined}
+              onDismiss={handleCancelReply}
+              isInputBar
+            />
+          ) : null}
+
+          <MessageInput onSend={handleSend} disabled={isSending} />
+        </View>
+        </View>
+      </SafeAreaView>
     </GestureDetector>
   );
 }
@@ -356,6 +352,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  flex: {
+    flex: 1,
   },
   header: {
     flexDirection: "row",
@@ -423,5 +422,10 @@ const styles = StyleSheet.create({
   },
   swipeableContent: {
     width: "100%",
+  },
+  composer: {
+    zIndex: 10,
+    elevation: 10,
+    backgroundColor: Colors.transparent,
   },
 });

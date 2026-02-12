@@ -8,9 +8,7 @@ import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useState } from "react";
 import {
     Alert,
-    KeyboardAvoidingView,
     Modal,
-    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -262,10 +260,7 @@ export function OnboardingScreen() {
   );
 
   const renderAuth = () => (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={styles.authContainer}
-    >
+    <View style={styles.authContainer}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
@@ -377,7 +372,7 @@ export function OnboardingScreen() {
           </View>
         </Animated.View>
       </ScrollView>
-    </KeyboardAvoidingView>
+    </View>
   );
 
   return (
