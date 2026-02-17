@@ -7,8 +7,14 @@
 
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useState } from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { useCallback, useRef, useState } from "react";
+import {
+  Pressable,
+  StyleSheet,
+  TextInput,
+  TextInputContentSizeChangeEvent,
+  View,
+} from "react-native";
 import Animated, {
     useAnimatedStyle,
     useSharedValue,
@@ -20,15 +26,25 @@ import { Colors } from "../theme";
 interface MessageInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
+  disableSend?: boolean;
+  disableInput?: boolean;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const MIN_INPUT_HEIGHT = 44;
+const INPUT_LINE_HEIGHT = 20;
+const MAX_INPUT_LINES = 5;
+const MAX_INPUT_HEIGHT = INPUT_LINE_HEIGHT * MAX_INPUT_LINES + 20;
 
 export function MessageInput({
   onSend,
   disabled = false,
+  disableSend,
+  disableInput,
 }: MessageInputProps) {
+  const inputRef = useRef<TextInput>(null);
   const [message, setMessage] = useState("");
+  const [inputHeight, setInputHeight] = useState(MIN_INPUT_HEIGHT);
   const scale = useSharedValue(1);
 
   const animatedButtonStyle = useAnimatedStyle(() => ({
@@ -43,29 +59,54 @@ export function MessageInput({
     scale.value = withSpring(1, { damping: 15, stiffness: 300 });
   };
 
+  const isSendDisabled = disableSend ?? disabled;
+  const isInputDisabled = disableInput ?? disabled;
+
   const handleSend = () => {
     const trimmedMessage = message.trim();
-    if (trimmedMessage && !disabled) {
+    if (trimmedMessage && !isSendDisabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       onSend(trimmedMessage);
       setMessage("");
+      setInputHeight(MIN_INPUT_HEIGHT);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
     }
   };
 
-  const canSend = message.trim().length > 0 && !disabled;
+  const handleContentSizeChange = useCallback(
+    (event: TextInputContentSizeChangeEvent) => {
+      const contentSize = event.nativeEvent.contentSize;
+      const nextHeight = Math.max(
+        MIN_INPUT_HEIGHT,
+        Math.min(
+          Math.ceil(contentSize.height),
+          MAX_INPUT_HEIGHT,
+        ),
+      );
+      setInputHeight((prev) => (Math.abs(prev - nextHeight) > 1 ? nextHeight : prev));
+    },
+    [],
+  );
+
+  const canSend = message.trim().length > 0 && !isSendDisabled;
 
   return (
     <View style={styles.container}>
       <TextInput
-        style={styles.input}
+        ref={inputRef}
+        style={[styles.input, { height: inputHeight }]}
         value={message}
         onChangeText={setMessage}
+        onContentSizeChange={handleContentSizeChange}
         placeholder="Message"
         placeholderTextColor={Colors.textMuted}
         multiline
         scrollEnabled
+        blurOnSubmit={false}
         maxLength={MAX_MESSAGE_LENGTH}
-        editable={!disabled}
+        editable={!isInputDisabled}
         selectionColor={Colors.accent}
       />
 
@@ -104,10 +145,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    lineHeight: INPUT_LINE_HEIGHT,
+    textAlignVertical: "top",
     color: Colors.textPrimary,
     fontSize: 16,
-    minHeight: 44,
-    maxHeight: 44,
+    minHeight: MIN_INPUT_HEIGHT,
+    maxHeight: MAX_INPUT_HEIGHT,
   },
   sendButton: {
     width: 44,

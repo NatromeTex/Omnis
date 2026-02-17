@@ -2,13 +2,15 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-    Alert,
-    FlatList,
+  Alert,
+  FlatList,
   LayoutChangeEvent,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -106,6 +108,9 @@ export function ChatScreen({
   onOpenProfile,
 }: ChatScreenProps) {
   const flatListRef = useRef<FlatList>(null);
+  const hasInitialScrollDoneRef = useRef(false);
+  const isNearBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(0);
   const { auth } = useApp();
   const { messages, isSending, openChat, closeChat, sendMessage } = useChat();
 
@@ -147,10 +152,52 @@ export function ChatScreen({
 
   useEffect(() => {
     console.log("[ChatScreen] mount", { chatId, withUser });
+    hasInitialScrollDoneRef.current = false;
+    isNearBottomRef.current = true;
+    previousMessageCountRef.current = 0;
     openChat(chatId);
     return () => closeChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
+
+  const handleContentSizeChange = useCallback(() => {
+    if (orderedMessages.length === 0 || hasInitialScrollDoneRef.current) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated: false });
+    });
+    isNearBottomRef.current = true;
+    hasInitialScrollDoneRef.current = true;
+  }, [orderedMessages.length]);
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const distanceFromBottom =
+        contentSize.height - (contentOffset.y + layoutMeasurement.height);
+      isNearBottomRef.current = distanceFromBottom <= 100;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const previousCount = previousMessageCountRef.current;
+    const currentCount = orderedMessages.length;
+
+    if (
+      hasInitialScrollDoneRef.current &&
+      currentCount > previousCount &&
+      isNearBottomRef.current
+    ) {
+      requestAnimationFrame(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      });
+    }
+
+    previousMessageCountRef.current = currentCount;
+  }, [orderedMessages.length]);
 
 
 
@@ -278,7 +325,7 @@ export function ChatScreen({
 
   return (
     <GestureDetector gesture={backSwipeGesture}>
-      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+      <SafeAreaView style={styles.container} edges={["bottom"]}>
         <View style={styles.flex}>
         {/* Header */}
         <View style={styles.header}>
@@ -305,12 +352,14 @@ export function ChatScreen({
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={[
             styles.messagesContent,
-            { paddingBottom: composerHeight + 12 },
+            { paddingBottom: composerHeight + 8 },
             orderedMessages.length === 0 && styles.messagesContentEmpty,
           ]}
           ListEmptyComponent={renderEmpty}
           showsVerticalScrollIndicator={false}
           inverted={false}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
           onScrollToIndexFailed={(info) => {
             // Fallback: scroll to approximate offset
@@ -319,11 +368,7 @@ export function ChatScreen({
               animated: true,
             });
           }}
-          onContentSizeChange={() => {
-            if (orderedMessages.length > 0) {
-              flatListRef.current?.scrollToEnd({ animated: false });
-            }
-          }}
+          onContentSizeChange={handleContentSizeChange}
         />
 
         {/* Floating composer (no absolute; overlaps via negative margin) */}
@@ -340,7 +385,7 @@ export function ChatScreen({
             />
           ) : null}
 
-          <MessageInput onSend={handleSend} disabled={isSending} />
+          <MessageInput onSend={handleSend} disableSend={isSending} />
         </View>
         </View>
       </SafeAreaView>
@@ -395,6 +440,7 @@ const styles = StyleSheet.create({
   messagesContent: {
     padding: 8,
     flexGrow: 1,
+    justifyContent: "flex-end",
   },
   messagesContentEmpty: {
     justifyContent: "center",
