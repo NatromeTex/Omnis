@@ -7,7 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     FlatList,
@@ -21,6 +21,7 @@ import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ChatListItem, SearchBar } from "../components";
 import { useApp, useChat } from "../context";
+import { searchUsers } from "../services/api";
 import { Colors } from "../theme";
 import type { LocalChat, RootStackParamList } from "../types";
 
@@ -36,6 +37,36 @@ export function HomeScreen() {
     searchChats,
     createChat,
   } = useChat();
+
+  const [userSuggestions, setUserSuggestions] = useState<
+    { id: number; username: string }[]
+  >([]);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, []);
+
+  const handleAddModeQueryChange = useCallback((query: string) => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setUserSuggestions([]);
+      return;
+    }
+
+    debounceTimer.current = setTimeout(async () => {
+      try {
+        const results = await searchUsers(trimmed);
+        setUserSuggestions(results);
+      } catch {
+        setUserSuggestions([]);
+      }
+    }, 400);
+  }, []);
 
   useEffect(() => {
     if (auth.isAuthenticated) {
@@ -146,6 +177,8 @@ export function HomeScreen() {
         <SearchBar
           onSearch={handleSearch}
           onAddUser={handleAddUser}
+          onAddModeQueryChange={handleAddModeQueryChange}
+          userSuggestions={userSuggestions}
           placeholder="Search chats"
         />
       </View>

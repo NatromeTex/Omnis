@@ -252,6 +252,15 @@ export async function sendMessage(
   };
 }
 
+// ============ User Search API ============
+export async function searchUsers(
+  query: string,
+): Promise<{ id: number; username: string }[]> {
+  return request<{ id: number; username: string }[]>(
+    `${ENDPOINTS.USERS_SEARCH}?q=${encodeURIComponent(query)}`,
+  );
+}
+
 export async function healthCheck(): Promise<{ PING: string }> {
   const baseUrl = await getApiBaseUrl();
   const response = await fetch(`${baseUrl}/`);

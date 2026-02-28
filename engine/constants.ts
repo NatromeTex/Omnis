@@ -45,6 +45,9 @@ export const ENDPOINTS = {
   // User Public Key
   GET_PKEY: "/user/pkey/get",
 
+  // Users
+  USERS_SEARCH: "/users/search",
+
   // Chat
   CHAT_LIST: "/chat/list",
   CHAT_CREATE: "/chat/create",

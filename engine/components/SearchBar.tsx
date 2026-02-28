@@ -1,12 +1,19 @@
 /**
  * SearchBar Component
- * Search input with add button functionality
+ * Search input with add button functionality and user autocomplete
  */
 
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import {
+    FlatList,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
 import Animated, {
     interpolate,
     useAnimatedStyle,
@@ -16,9 +23,16 @@ import Animated, {
 } from "react-native-reanimated";
 import { Colors } from "../theme";
 
+interface UserSuggestion {
+  id: number;
+  username: string;
+}
+
 interface SearchBarProps {
   onSearch: (query: string) => void;
   onAddUser: (username: string) => void;
+  onAddModeQueryChange?: (query: string) => void;
+  userSuggestions?: UserSuggestion[];
   placeholder?: string;
 }
 
@@ -27,6 +41,8 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 export function SearchBar({
   onSearch,
   onAddUser,
+  onAddModeQueryChange,
+  userSuggestions = [],
   placeholder = "Search chats",
 }: SearchBarProps) {
   const [query, setQuery] = useState("");
@@ -55,11 +71,16 @@ export function SearchBar({
     setIsAddMode(newMode);
     modeProgress.value = withTiming(newMode ? 1 : 0, { duration: 200 });
     setQuery("");
+    if (!newMode) {
+      onAddModeQueryChange?.("");
+    }
   };
 
   const handleChangeText = (text: string) => {
     setQuery(text);
-    if (!isAddMode) {
+    if (isAddMode) {
+      onAddModeQueryChange?.(text);
+    } else {
       onSearch(text);
     }
   };
@@ -69,12 +90,44 @@ export function SearchBar({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       onAddUser(query.trim());
       setQuery("");
+      onAddModeQueryChange?.("");
       toggleMode();
     }
   };
 
+  const handleSelectSuggestion = (username: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onAddUser(username);
+    setQuery("");
+    onAddModeQueryChange?.("");
+    toggleMode();
+  };
+
+  const showSuggestions = isAddMode && userSuggestions.length > 0 && query.trim().length > 0;
+
   return (
-    <View style={styles.container}>
+    <View style={styles.wrapper}>
+      {showSuggestions && (
+        <View style={styles.suggestionsContainer}>
+          <FlatList
+            data={userSuggestions}
+            keyExtractor={(item) => item.id.toString()}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <Pressable
+                style={styles.suggestionItem}
+                onPress={() => handleSelectSuggestion(item.username)}
+              >
+                <View style={styles.suggestionAvatar}>
+                  <Ionicons name="person" size={16} color={Colors.accent} />
+                </View>
+                <Text style={styles.suggestionText}>{item.username}</Text>
+              </Pressable>
+            )}
+          />
+        </View>
+      )}
+      <View style={styles.container}>
       <View style={styles.inputContainer}>
         <Ionicons
           name={isAddMode ? "person-add-outline" : "search-outline"}
@@ -123,11 +176,40 @@ export function SearchBar({
           color={isAddMode ? Colors.background : Colors.accent}
         />
       </AnimatedPressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    backgroundColor: Colors.background,
+  },
+  suggestionsContainer: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    maxHeight: 280,
+  },
+  suggestionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  suggestionAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.surface,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  suggestionText: {
+    fontSize: 16,
+    color: Colors.textPrimary,
+    fontWeight: "500",
+  },
   container: {
     flexDirection: "row",
     alignItems: "center",
