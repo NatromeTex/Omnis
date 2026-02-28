@@ -4,10 +4,13 @@
  */
 
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useState } from "react";
 import {
     Alert,
+    FlatList,
     Modal,
     Pressable,
     ScrollView,
@@ -18,17 +21,14 @@ import {
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, runOnJS } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import QRCode from "react-native-qrcode-svg";
 import { Button, Header, Input, SettingsItem } from "../components";
 import { useApp } from "../context";
 import { healthCheck } from "../services/api";
 import { clearLogs, getLogText, subscribeLogs } from "../services/logging";
 import { APP_VERSION } from "../constants";
 import { Colors } from "../theme";
-
-interface SettingsScreenProps {
-  onBack: () => void;
-  onOpenProfile: () => void;
-}
+import type { RootStackParamList } from "../types";
 
 const THEME_COLORS = [
   { name: "Cyan", value: "#96ACB7" },
@@ -41,13 +41,15 @@ const THEME_COLORS = [
   { name: "Red", value: "#E57373" },
 ];
 
-export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
+export function SettingsScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, "Settings">>();
   const insets = useSafeAreaInsets();
-  const { auth, settings, setApiBaseUrl, setThemeColor } = useApp();
+  const { auth, settings, setApiBaseUrl, setThemeColor, setPersistentStorage, urlHistory } = useApp();
 
   const [showUrlModal, setShowUrlModal] = useState(false);
   const [showColorModal, setShowColorModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [urlInput, setUrlInput] = useState(settings.apiBaseUrl);
   const [isTesting, setIsTesting] = useState(false);
   const [logText, setLogText] = useState("");
@@ -66,7 +68,7 @@ export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
 
   const handleBack = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onBack();
+    navigation.goBack();
   };
 
   const handleTestConnection = useCallback(async () => {
@@ -146,7 +148,7 @@ export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
               icon="person-outline"
               title="Profile"
               subtitle={auth.username || "View your profile"}
-              onPress={onOpenProfile}
+              onPress={() => navigation.navigate("Profile")}
             />
           </Animated.View>
 
@@ -212,6 +214,25 @@ export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
             />
           </Animated.View>
 
+          {/* Storage Section */}
+          <Animated.View
+            entering={FadeIn.delay(250).duration(300)}
+            style={styles.section}
+          >
+            <Text style={styles.sectionTitle}>Storage</Text>
+
+            <SettingsItem
+              type="toggle"
+              icon="save-outline"
+              title="Persistent Storage"
+              subtitle="Keep messages when logged out"
+              value={settings.persistentStorage}
+              onValueChange={(value) => {
+                setPersistentStorage(value);
+              }}
+            />
+          </Animated.View>
+
           {/* About Section */}
           <Animated.View
             entering={FadeIn.delay(300).duration(300)}
@@ -259,15 +280,69 @@ export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
                 Enter the URL of your Omnis server
               </Text>
 
-              <Input
-                value={urlInput}
-                onChangeText={setUrlInput}
-                placeholder="http://localhost:8000"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                containerStyle={styles.modalInput}
-              />
+              <View style={styles.urlInputRow}>
+                <Input
+                  value={urlInput}
+                  onChangeText={setUrlInput}
+                  placeholder="http://localhost:8000"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  containerStyle={styles.urlInputField}
+                />
+                <Pressable
+                  style={styles.qrButton}
+                  onPress={() => {
+                    setShowUrlModal(false);
+                    setShowQrModal(true);
+                  }}
+                  hitSlop={4}
+                >
+                  <Ionicons name="qr-code-outline" size={22} color={Colors.accent} />
+                </Pressable>
+              </View>
+
+              {urlHistory.length > 0 && (
+                <View style={styles.historyContainer}>
+                  <Text style={styles.historyLabel}>Recent servers</Text>
+                  <FlatList
+                    data={urlHistory}
+                    keyExtractor={(item) => item}
+                    style={styles.historyList}
+                    keyboardShouldPersistTaps="handled"
+                    renderItem={({ item }) => (
+                      <Pressable
+                        style={[
+                          styles.historyItem,
+                          item === settings.apiBaseUrl && styles.historyItemActive,
+                        ]}
+                        onPress={() => setUrlInput(item)}
+                      >
+                        <Ionicons
+                          name="time-outline"
+                          size={14}
+                          color={item === settings.apiBaseUrl ? Colors.accent : Colors.textMuted}
+                          style={styles.historyIcon}
+                        />
+                        <Text
+                          style={[
+                            styles.historyText,
+                            item === settings.apiBaseUrl && styles.historyTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {item}
+                        </Text>
+                        {item === settings.apiBaseUrl && (
+                          <View style={styles.connectedBadge}>
+                            <Text style={styles.connectedBadgeText}>current</Text>
+                          </View>
+                        )}
+                      </Pressable>
+                    )}
+                  />
+                </View>
+              )}
 
               <View style={styles.modalButtons}>
                 <Button
@@ -286,6 +361,43 @@ export function SettingsScreen({ onBack, onOpenProfile }: SettingsScreenProps) {
                   style={styles.modalButton}
                 />
               </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* QR Code Modal */}
+        <Modal
+          visible={showQrModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowQrModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, styles.qrModalContent]}>
+              <Text style={styles.modalTitle}>Server QR Code</Text>
+              <Text style={styles.modalSubtitle}>
+                Scan this to connect to the same server
+              </Text>
+
+              <View style={styles.qrCodeContainer}>
+                <QRCode
+                  value={settings.apiBaseUrl}
+                  size={200}
+                  color={Colors.textPrimary}
+                  backgroundColor={Colors.surface}
+                />
+              </View>
+
+              <Text style={styles.qrUrlLabel} numberOfLines={1}>
+                {settings.apiBaseUrl}
+              </Text>
+
+              <Button
+                title="Close"
+                onPress={() => setShowQrModal(false)}
+                variant="ghost"
+                size="medium"
+              />
             </View>
           </View>
         </Modal>
@@ -433,6 +545,94 @@ const styles = StyleSheet.create({
   },
   modalInput: {
     marginBottom: 24,
+  },
+  urlInputRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 12,
+  },
+  urlInputField: {
+    flex: 1,
+  },
+  qrButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: Colors.surfaceVariant,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  historyContainer: {
+    marginBottom: 16,
+  },
+  historyLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: Colors.textMuted,
+    marginBottom: 6,
+    marginLeft: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  historyList: {
+    maxHeight: 140,
+    borderRadius: 10,
+    backgroundColor: Colors.surfaceVariant,
+  },
+  historyItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  historyItemActive: {
+    backgroundColor: "rgba(150, 172, 183, 0.08)",
+  },
+  historyIcon: {
+    marginRight: 8,
+  },
+  historyText: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  historyTextActive: {
+    color: Colors.accent,
+    fontWeight: "500",
+  },
+  connectedBadge: {
+    backgroundColor: "rgba(150, 172, 183, 0.15)",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+  },
+  connectedBadgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: Colors.accent,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  qrModalContent: {
+    alignItems: "center",
+  },
+  qrCodeContainer: {
+    padding: 20,
+    borderRadius: 16,
+    backgroundColor: Colors.surface,
+    marginBottom: 16,
+  },
+  qrUrlLabel: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginBottom: 20,
+    textAlign: "center",
   },
   modalButtons: {
     flexDirection: "row",

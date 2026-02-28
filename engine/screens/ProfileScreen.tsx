@@ -4,6 +4,8 @@
  */
 
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -25,13 +27,10 @@ import {
     revokeSession,
 } from "../services/api";
 import { Colors } from "../theme";
-import type { Session } from "../types";
+import type { RootStackParamList, Session } from "../types";
 
-interface ProfileScreenProps {
-  onBack: () => void;
-}
-
-export function ProfileScreen({ onBack }: ProfileScreenProps) {
+export function ProfileScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, "Profile">>();
   const insets = useSafeAreaInsets();
   const { auth, logout } = useApp();
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -48,7 +47,7 @@ export function ProfileScreen({ onBack }: ProfileScreenProps) {
 
   const handleBack = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onBack();
+    navigation.goBack();
   };
 
   const loadSessions = useCallback(async () => {

@@ -1,4 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation, useRoute } from "@react-navigation/native";
+import type { NativeStackNavigationProp, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -22,17 +24,10 @@ import Animated, {
     withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Avatar, MessageBubble, MessageInput, ReplyPreview } from "../components";
+import { Avatar, MessageBubble, MessageInput, ReplyPreview, Toast } from "../components";
 import { useApp, useChat } from "../context";
 import { Colors } from "../theme";
-import type { LocalMessage } from "../types";
-
-interface ChatScreenProps {
-  chatId: number;
-  withUser: string;
-  onBack: () => void;
-  onOpenProfile: () => void;
-}
+import type { LocalMessage, RootStackParamList } from "../types";
 
 function SwipeableMessageRow({
   item,
@@ -101,12 +96,11 @@ function SwipeableMessageRow({
   );
 }
 
-export function ChatScreen({
-  chatId,
-  withUser,
-  onBack,
-  onOpenProfile,
-}: ChatScreenProps) {
+export function ChatScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, "Chat">>();
+  const route = useRoute<NativeStackScreenProps<RootStackParamList, "Chat">["route"]>();
+  const { chatId, withUser } = route.params;
+
   const flatListRef = useRef<FlatList>(null);
   const hasInitialScrollDoneRef = useRef(false);
   const isNearBottomRef = useRef(true);
@@ -116,6 +110,9 @@ export function ChatScreen({
 
   // Reply state
   const [replyTo, setReplyTo] = useState<LocalMessage | null>(null);
+
+  // Toast state
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Composer (reply preview + input) height for bottom padding + overlap
   const [composerHeight, setComposerHeight] = useState(72);
@@ -213,7 +210,7 @@ export function ChatScreen({
   const handleBack = () => {
     console.log("[ChatScreen] back pressed", { chatId, withUser });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onBack();
+    navigation.goBack();
   };
 
   // Reply handlers
@@ -333,7 +330,7 @@ export function ChatScreen({
             <Ionicons name="chevron-back" size={28} color={Colors.accent} />
           </Pressable>
 
-          <Pressable onPress={onOpenProfile} style={styles.userInfo}>
+          <Pressable onPress={() => navigation.navigate("Profile")} style={styles.userInfo}>
             <Avatar name={withUser} size={40} />
             <View style={styles.userTextContainer}>
               <Text style={styles.userName}>{withUser}</Text>
@@ -385,9 +382,17 @@ export function ChatScreen({
             />
           ) : null}
 
-          <MessageInput onSend={handleSend} disableSend={isSending} />
+          <MessageInput
+            onSend={handleSend}
+            disableSend={isSending || !auth.isAuthenticated}
+            disableInput={!auth.isAuthenticated}
+            onDisabledPress={() =>
+              setToastMessage("Not connected to server. Please check the URL in settings.")
+            }
+          />
         </View>
         </View>
+        <Toast message={toastMessage} onHide={() => setToastMessage(null)} />
       </SafeAreaView>
     </GestureDetector>
   );

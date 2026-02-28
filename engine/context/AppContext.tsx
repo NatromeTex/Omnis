@@ -24,6 +24,7 @@ import {
 } from "../services/crypto";
 import { clearAllData, initDatabase } from "../services/database";
 import {
+    addUrlToHistory,
     clearAuthToken,
     clearCurrentUser,
     clearIdentityKeys,
@@ -32,9 +33,12 @@ import {
     getCurrentUser,
     getDeviceId,
     getIdentityKeys,
+    getPersistentStorage,
     getThemeColor,
+    getUrlHistory,
     isOnboardingComplete,
     setApiBaseUrl as saveApiBaseUrl,
+    setPersistentStorage as savePersistentStorage,
     setThemeColor as saveThemeColor,
     setAuthToken,
     setCurrentUser,
@@ -51,6 +55,7 @@ interface AppState {
   isOnboardingComplete: boolean;
   identityPrivateKey: string | null; // Decrypted private key (in memory only)
   identityPublicKey: string | null;
+  urlHistory: string[];
 }
 
 type AppAction =
@@ -62,6 +67,7 @@ type AppAction =
       type: "SET_IDENTITY_KEYS";
       payload: { privateKey: string | null; publicKey: string | null };
     }
+  | { type: "SET_URL_HISTORY"; payload: string[] }
   | { type: "LOGOUT" };
 
 // Initial state
@@ -76,11 +82,13 @@ const initialState: AppState = {
   settings: {
     apiBaseUrl: "http://localhost:8000",
     themeColor: "#96ACB7",
+    persistentStorage: true,
   },
   isLoading: true,
   isOnboardingComplete: false,
   identityPrivateKey: null,
   identityPublicKey: null,
+  urlHistory: [],
 };
 
 // Reducer
@@ -100,6 +108,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
         identityPrivateKey: action.payload.privateKey,
         identityPublicKey: action.payload.publicKey,
       };
+    case "SET_URL_HISTORY":
+      return { ...state, urlHistory: action.payload };
     case "LOGOUT":
       return {
         ...state,
@@ -125,7 +135,9 @@ interface AppContextValue extends AppState {
   logout: () => Promise<void>;
   setApiBaseUrl: (url: string) => Promise<void>;
   setThemeColor: (color: string) => Promise<void>;
+  setPersistentStorage: (enabled: boolean) => Promise<void>;
   completeOnboarding: () => Promise<void>;
+  refreshUrlHistory: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -155,13 +167,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Load settings
         const apiBaseUrl = await getApiBaseUrl();
         const themeColor = await getThemeColor();
+        const persistentStorage = await getPersistentStorage();
         dispatch({
           type: "SET_SETTINGS",
           payload: {
             apiBaseUrl,
             themeColor: themeColor || "#96ACB7",
+            persistentStorage,
           },
         });
+
+        // Load URL history
+        const history = await getUrlHistory();
+        dispatch({ type: "SET_URL_HISTORY", payload: history });
 
         // Check for existing auth
         const token = await getAuthToken();
@@ -193,11 +211,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               });
             }
           } catch {
-            // Token is invalid, clear auth AND local data for security
+            // Token is invalid, clear auth
             await clearAuthToken();
             await clearCurrentUser();
             await clearIdentityKeys();
-            await clearAllData(); // Clear database when session is invalid
+            // Only clear local DB if persistent storage is off
+            if (!persistentStorage) {
+              await clearAllData();
+            }
           }
         }
       } catch (error) {
@@ -288,21 +309,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await clearAuthToken();
     await clearCurrentUser();
     await clearIdentityKeys();
-    await clearAllData(); // Clear local database for security
+    // Only clear local DB if persistent storage is off
+    const persistent = await getPersistentStorage();
+    if (!persistent) {
+      await clearAllData();
+    }
 
     dispatch({ type: "LOGOUT" });
   }, []);
 
   // Set API base URL
   const setApiBaseUrl = useCallback(async (url: string) => {
+    const previousUrl = await getApiBaseUrl();
     await saveApiBaseUrl(url);
+    const updatedHistory = await addUrlToHistory(url);
     dispatch({ type: "SET_SETTINGS", payload: { apiBaseUrl: url } });
+    dispatch({ type: "SET_URL_HISTORY", payload: updatedHistory });
+    // Clear local DB when server changes
+    if (previousUrl !== url) {
+      await clearAllData();
+    }
+  }, []);
+
+  // Refresh URL history from storage
+  const refreshUrlHistory = useCallback(async () => {
+    const history = await getUrlHistory();
+    dispatch({ type: "SET_URL_HISTORY", payload: history });
   }, []);
 
   // Set theme color
   const setThemeColor = useCallback(async (color: string) => {
     await saveThemeColor(color);
     dispatch({ type: "SET_SETTINGS", payload: { themeColor: color } });
+  }, []);
+
+  // Set persistent storage
+  const setPersistentStorage = useCallback(async (enabled: boolean) => {
+    await savePersistentStorage(enabled);
+    dispatch({ type: "SET_SETTINGS", payload: { persistentStorage: enabled } });
   }, []);
 
   // Complete onboarding
@@ -318,7 +362,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     logout,
     setApiBaseUrl,
     setThemeColor,
+    setPersistentStorage,
     completeOnboarding,
+    refreshUrlHistory,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

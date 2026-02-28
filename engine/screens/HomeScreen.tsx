@@ -4,6 +4,8 @@
  */
 
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect } from "react";
 import {
@@ -20,14 +22,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ChatListItem, SearchBar } from "../components";
 import { useApp, useChat } from "../context";
 import { Colors } from "../theme";
-import type { LocalChat } from "../types";
+import type { LocalChat, RootStackParamList } from "../types";
 
-interface HomeScreenProps {
-  onOpenChat: (chatId: number, withUser: string) => void;
-  onOpenSettings: () => void;
-}
-
-export function HomeScreen({ onOpenChat, onOpenSettings }: HomeScreenProps) {
+export function HomeScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, "Home">>();
   const insets = useSafeAreaInsets();
   const { auth } = useApp();
   const {
@@ -53,6 +51,13 @@ export function HomeScreen({ onOpenChat, onOpenSettings }: HomeScreenProps) {
     [searchChats],
   );
 
+  const handleOpenChat = useCallback(
+    (chatId: number, withUser: string) => {
+      navigation.navigate("Chat", { chatId, withUser });
+    },
+    [navigation],
+  );
+
   const handleAddUser = useCallback(
     async (username: string) => {
       if (username.toLowerCase() === auth.username?.toLowerCase()) {
@@ -62,12 +67,12 @@ export function HomeScreen({ onOpenChat, onOpenSettings }: HomeScreenProps) {
 
       try {
         const chatId = await createChat(username);
-        onOpenChat(chatId, username);
+        handleOpenChat(chatId, username);
       } catch (error: any) {
         Alert.alert("Error", error.message || "Failed to create chat");
       }
     },
-    [createChat, onOpenChat, auth.username],
+    [createChat, handleOpenChat, auth.username],
   );
 
   const handleRefresh = useCallback(() => {
@@ -76,7 +81,7 @@ export function HomeScreen({ onOpenChat, onOpenSettings }: HomeScreenProps) {
 
   const handleSettingsPress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onOpenSettings();
+    navigation.navigate("Settings");
   };
 
   const renderItem = useCallback(
@@ -86,11 +91,11 @@ export function HomeScreen({ onOpenChat, onOpenSettings }: HomeScreenProps) {
         lastMessage={item.last_message}
         lastMessageTime={item.last_message_time}
         unreadCount={item.unread_count}
-        onPress={() => onOpenChat(item.chat_id, item.with_user)}
+        onPress={() => handleOpenChat(item.chat_id, item.with_user)}
         index={index}
       />
     ),
-    [onOpenChat],
+    [handleOpenChat],
   );
 
   const renderEmpty = () => (

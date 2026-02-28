@@ -95,6 +95,50 @@ export async function getApiBaseUrl(): Promise<string> {
 }
 
 /**
+ * Get URL history (most-recent first)
+ */
+export async function getUrlHistory(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(STORAGE_KEYS.URL_HISTORY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Add a URL to the history (deduplicates, keeps most-recent first, max 10)
+ */
+export async function addUrlToHistory(url: string): Promise<string[]> {
+  const history = await getUrlHistory();
+  const filtered = history.filter((u) => u !== url);
+  const updated = [url, ...filtered].slice(0, 10);
+  await AsyncStorage.setItem(STORAGE_KEYS.URL_HISTORY, JSON.stringify(updated));
+  return updated;
+}
+
+/**
+ * Set persistent storage preference
+ */
+export async function setPersistentStorage(enabled: boolean): Promise<void> {
+  await AsyncStorage.setItem(
+    STORAGE_KEYS.PERSISTENT_STORAGE,
+    enabled ? "true" : "false",
+  );
+}
+
+/**
+ * Get persistent storage preference (defaults to true)
+ */
+export async function getPersistentStorage(): Promise<boolean> {
+  const value = await AsyncStorage.getItem(STORAGE_KEYS.PERSISTENT_STORAGE);
+  // Default to true when not set
+  return value !== "false";
+}
+
+/**
  * Set theme color
  */
 export async function setThemeColor(color: string): Promise<void> {

@@ -13,4 +13,5 @@ export { ReplyPreview } from "./ReplyPreview";
 export { SearchBar } from "./SearchBar";
 export { SessionItem } from "./SessionItem";
 export { SettingsItem } from "./SettingsItem";
+export { Toast } from "./Toast";
 

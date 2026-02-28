@@ -24,6 +24,8 @@ export const STORAGE_KEYS = {
   API_BASE_URL: "apiBaseUrl",
   THEME_COLOR: "themeColor",
   ONBOARDING_COMPLETE: "onboardingComplete",
+  URL_HISTORY: "urlHistory",
+  PERSISTENT_STORAGE: "persistentStorage",
 } as const;
 
 // API Endpoints

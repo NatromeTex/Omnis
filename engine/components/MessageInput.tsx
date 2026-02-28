@@ -28,6 +28,8 @@ interface MessageInputProps {
   disabled?: boolean;
   disableSend?: boolean;
   disableInput?: boolean;
+  /** Called when the user taps the input while it is disabled */
+  onDisabledPress?: () => void;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -41,6 +43,7 @@ export function MessageInput({
   disabled = false,
   disableSend,
   disableInput,
+  onDisabledPress,
 }: MessageInputProps) {
   const inputRef = useRef<TextInput>(null);
   const [message, setMessage] = useState("");
@@ -94,21 +97,29 @@ export function MessageInput({
 
   return (
     <View style={styles.container}>
-      <TextInput
-        ref={inputRef}
-        style={[styles.input, { height: inputHeight }]}
-        value={message}
-        onChangeText={setMessage}
-        onContentSizeChange={handleContentSizeChange}
-        placeholder="Message"
-        placeholderTextColor={Colors.textMuted}
-        multiline
-        scrollEnabled
-        blurOnSubmit={false}
-        maxLength={MAX_MESSAGE_LENGTH}
-        editable={!isInputDisabled}
-        selectionColor={Colors.accent}
-      />
+      <View style={styles.inputWrapper}>
+        <TextInput
+          ref={inputRef}
+          style={[styles.input, { height: inputHeight }]}
+          value={message}
+          onChangeText={setMessage}
+          onContentSizeChange={handleContentSizeChange}
+          placeholder={isInputDisabled ? "Not connected" : "Message"}
+          placeholderTextColor={Colors.textMuted}
+          multiline
+          scrollEnabled
+          blurOnSubmit={false}
+          maxLength={MAX_MESSAGE_LENGTH}
+          editable={!isInputDisabled}
+          selectionColor={Colors.accent}
+        />
+        {isInputDisabled && onDisabledPress ? (
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={onDisabledPress}
+          />
+        ) : null}
+      </View>
 
       <AnimatedPressable
         style={[
@@ -138,6 +149,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 8,
+  },
+  inputWrapper: {
+    flex: 1,
+    position: "relative",
   },
   input: {
     flex: 1,

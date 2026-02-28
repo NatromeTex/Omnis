@@ -46,7 +46,7 @@ export function ReplyPreview({
       <View
         style={[styles.accent, isInputBar && styles.accentInputBar]}
       />
-      <View style={styles.textContainer}>
+      <View style={[styles.textContainer, isInputBar && styles.textContainerInputBar]}>
         {replySender ? (
           <Text
             style={[styles.sender, isInputBar && styles.senderInputBar]}
@@ -116,8 +116,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accent,
   },
   textContainer: {
-    flex: 1,
+    flexShrink: 1,
     gap: 1,
+  },
+  textContainerInputBar: {
+    flex: 1,
   },
   sender: {
     fontSize: 12,
