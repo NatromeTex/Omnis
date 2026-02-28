@@ -83,8 +83,14 @@ function getDb(): SQLite.SQLiteDatabase {
 export async function upsertChat(chat: LocalChat): Promise<void> {
   const database = getDb();
   await database.runAsync(
-    `INSERT OR REPLACE INTO chats (chat_id, with_user, with_user_id, last_message, last_message_time, unread_count)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO chats (chat_id, with_user, with_user_id, last_message, last_message_time, unread_count)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       with_user = excluded.with_user,
+       with_user_id = COALESCE(excluded.with_user_id, chats.with_user_id),
+       last_message = COALESCE(excluded.last_message, chats.last_message),
+       last_message_time = COALESCE(excluded.last_message_time, chats.last_message_time),
+       unread_count = excluded.unread_count`,
     [
       chat.chat_id,
       chat.with_user,
@@ -102,7 +108,15 @@ export async function upsertChat(chat: LocalChat): Promise<void> {
 export async function getChats(): Promise<LocalChat[]> {
   const database = getDb();
   const rows = await database.getAllAsync<LocalChat>(
-    `SELECT * FROM chats ORDER BY last_message_time DESC`,
+    `SELECT c.chat_id, c.with_user, c.with_user_id, c.unread_count,
+       COALESCE(c.last_message,
+         (SELECT m.plaintext FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1)
+       ) as last_message,
+       COALESCE(c.last_message_time,
+         (SELECT m.created_at FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1)
+       ) as last_message_time
+     FROM chats c
+     ORDER BY last_message_time DESC`,
   );
   return rows;
 }
@@ -368,7 +382,16 @@ export async function closeDatabase(): Promise<void> {
 export async function searchChats(query: string): Promise<LocalChat[]> {
   const database = getDb();
   const rows = await database.getAllAsync<LocalChat>(
-    `SELECT * FROM chats WHERE with_user LIKE ? ORDER BY last_message_time DESC`,
+    `SELECT c.chat_id, c.with_user, c.with_user_id, c.unread_count,
+       COALESCE(c.last_message,
+         (SELECT m.plaintext FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1)
+       ) as last_message,
+       COALESCE(c.last_message_time,
+         (SELECT m.created_at FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1)
+       ) as last_message_time
+     FROM chats c
+     WHERE c.with_user LIKE ?
+     ORDER BY last_message_time DESC`,
     [`%${query}%`],
   );
   return rows;

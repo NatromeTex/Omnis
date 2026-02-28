@@ -34,14 +34,40 @@ export async function initDatabase(): Promise<void> {
  * Upsert a chat
  */
 export async function upsertChat(chat: LocalChat): Promise<void> {
-  memoryDb.chats.set(chat.chat_id, { ...chat });
+  const existing = memoryDb.chats.get(chat.chat_id);
+  if (existing) {
+    existing.with_user = chat.with_user;
+    existing.with_user_id = chat.with_user_id ?? existing.with_user_id;
+    existing.last_message = chat.last_message ?? existing.last_message;
+    existing.last_message_time = chat.last_message_time ?? existing.last_message_time;
+    existing.unread_count = chat.unread_count;
+  } else {
+    memoryDb.chats.set(chat.chat_id, { ...chat });
+  }
 }
 
 /**
  * Get all chats
  */
 export async function getChats(): Promise<LocalChat[]> {
-  return Array.from(memoryDb.chats.values()).sort((a, b) => {
+  const chats = Array.from(memoryDb.chats.values()).map((chat) => {
+    if (!chat.last_message || !chat.last_message_time) {
+      const msgs = memoryDb.messages.get(chat.chat_id);
+      if (msgs && msgs.length > 0) {
+        const sorted = [...msgs].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        );
+        const latest = sorted[0];
+        return {
+          ...chat,
+          last_message: chat.last_message ?? latest.plaintext ?? undefined,
+          last_message_time: chat.last_message_time ?? latest.created_at,
+        };
+      }
+    }
+    return chat;
+  });
+  return chats.sort((a, b) => {
     const timeA = a.last_message_time
       ? new Date(a.last_message_time).getTime()
       : 0;
@@ -301,15 +327,8 @@ export async function closeDatabase(): Promise<void> {
  */
 export async function searchChats(query: string): Promise<LocalChat[]> {
   const lowercaseQuery = query.toLowerCase();
-  return Array.from(memoryDb.chats.values())
-    .filter((chat) => chat.with_user.toLowerCase().includes(lowercaseQuery))
-    .sort((a, b) => {
-      const timeA = a.last_message_time
-        ? new Date(a.last_message_time).getTime()
-        : 0;
-      const timeB = b.last_message_time
-        ? new Date(b.last_message_time).getTime()
-        : 0;
-      return timeB - timeA;
-    });
+  const allChats = await getChats();
+  return allChats.filter((chat) =>
+    chat.with_user.toLowerCase().includes(lowercaseQuery),
+  );
 }
