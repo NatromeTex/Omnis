@@ -158,11 +158,3 @@ export interface WsPongFrame {
 }
 
 export type WsServerFrame = WsHistoryFrame | WsNewMessageFrame | WsPongFrame;
-
-// Navigation types
-export type RootStackParamList = {
-  Home: undefined;
-  Chat: { chatId: number; withUser: string };
-  Settings: undefined;
-  Profile: undefined;
-};
