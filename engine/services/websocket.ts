@@ -63,11 +63,16 @@ class ChatWebSocket {
         "{chat_id}",
         this.chatId.toString(),
       );
-      const url = `${wsBase}${path}?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceId)}`;
+      const url = `${wsBase}${path}`;
 
       console.log("[WS] Connecting to", path);
 
-      const ws = new WebSocket(url);
+      // Pass auth via Sec-WebSocket-Protocol subprotocols
+      const ws = new WebSocket(url, [
+        `omnis-token.${token}`,
+        `omnis-device.${deviceId}`,
+        "omnis-v1",
+      ]);
 
       ws.onopen = () => {
         console.log("[WS] Connected", { chatId: this.chatId });
@@ -96,7 +101,8 @@ class ChatWebSocket {
         this.ws = null;
         this.onStatus?.("disconnected");
 
-        if (!this.intentionallyClosed) {
+        // 4001 = auth rejected by server; do not retry
+        if (!this.intentionallyClosed && event.code !== 4001) {
           this._scheduleReconnect();
         }
       };

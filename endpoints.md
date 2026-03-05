@@ -59,6 +59,20 @@ Simple health check.
 ```
 
 ---
+### GET /version
+
+Server protocol check.
+
+**Auth:** none
+
+**Response**
+```json
+{
+  "version": "50"
+}
+```
+
+---
 
 ## Auth Endpoints
 
@@ -225,6 +239,45 @@ combination of the provided `Authorization` token and `X-Device-ID`.
 
 Errors:
 - `401` — unauthorized
+
+---
+
+### GET /users/search
+
+Searches for users by partial username match. Returns up to 7 best matches,
+ordered by relevance (exact match first, then prefix matches, then substring
+matches, with shorter usernames ranked higher).
+
+The authenticated user is excluded from results.
+
+**Headers**
+```
+Authorization: Bearer <token>
+X-Device-ID: <uuid-v4>
+```
+
+**Query parameters**
+```
+q: string (required, min length 1)  # partial username to search for
+```
+
+**Response — 200 OK**
+```json
+[
+  {
+    "id": 2,
+    "username": "alice"
+  },
+  {
+    "id": 7,
+    "username": "alicia"
+  }
+]
+```
+
+Errors:
+- `401` — unauthorized
+- `422` — missing or invalid query parameter
 
 ---
 
@@ -444,7 +497,23 @@ device_id: string (required)  # UUID v4 device identifier
       "reply_id": 1000,
       "ciphertext": "base64-or-opaque-string",
       "nonce": "string",
-      "created_at": "ISO-8601"
+      "created_at": "ISO-8601",
+      "attachments": [
+        {
+          "upload_id": "uuid-string",
+          "mime_type": "image/png",
+          "nonce": "string",
+          "total_chunks": 1,
+          "total_size": 204800,
+          "chunks": [
+            {
+              "media_id": 10,
+              "chunk_index": 0,
+              "file_size": 204800
+            }
+          ]
+        }
+      ]
     }
   ],
   "next_cursor": 1001
@@ -462,7 +531,8 @@ device_id: string (required)  # UUID v4 device identifier
     "reply_id": null,
     "ciphertext": "base64-or-opaque-string",
     "nonce": "string",
-    "created_at": "ISO-8601"
+    "created_at": "ISO-8601",
+    "attachments": []
   }
 }
 ```
@@ -523,7 +593,23 @@ limit: integer (optional, default 50, max 100)
       "reply_id": 1000,
       "ciphertext": "base64-or-opaque-string",
       "nonce": "string",
-      "created_at": "ISO-8601"
+      "created_at": "ISO-8601",
+      "attachments": [
+        {
+          "upload_id": "uuid-string",
+          "mime_type": "image/png",
+          "nonce": "string",
+          "total_chunks": 1,
+          "total_size": 204800,
+          "chunks": [
+            {
+              "media_id": 10,
+              "chunk_index": 0,
+              "file_size": 204800
+            }
+          ]
+        }
+      ]
     }
   ],
   "next_cursor": 1001
@@ -631,16 +717,39 @@ X-Device-ID: <uuid-v4>
   "epoch_id": 5,
   "ciphertext": "base64-or-opaque-string",
   "nonce": "string",
-  "reply_id": 1000
+  "reply_id": 1000,
+  "media_ids": [10, 11]
 }
 ```
+
+- `reply_id` is optional (omit or `null` for a non-reply message).
+- `media_ids` is optional. When provided, it is a list of `media.id` values
+  returned by `POST /media/upload`. Each referenced media must belong to the
+  same `chat_id` and all chunks must have been uploaded. The server links all
+  chunks of each upload to the message.
 
 **Response — 201 Created**
 ```json
 {
   "id": 1001,
   "epoch_id": 5,
-  "created_at": "ISO-8601"
+  "created_at": "ISO-8601",
+  "attachments": [
+    {
+      "upload_id": "uuid-string",
+      "mime_type": "image/png",
+      "nonce": "string",
+      "total_chunks": 1,
+      "total_size": 204800,
+      "chunks": [
+        {
+          "media_id": 10,
+          "chunk_index": 0,
+          "file_size": 204800
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -650,6 +759,165 @@ Errors:
 - `409` — unknown epoch
 - `409` — stale epoch; a newer epoch exists and must be used
 - `409` — epoch not initialized (wrapped keys missing)
+- `400` — referenced media not found or does not belong to this chat
+- `400` — upload incomplete (not all chunks uploaded)
+
+---
+
+## Media Endpoints
+
+Media attachments (images, GIFs, audio, video, large files) are uploaded
+separately from messages using a **two-step upload + reference** workflow:
+
+1. The client uploads encrypted file data chunk-by-chunk via `POST /media/upload`.
+2. The upload endpoint returns a `media_id` for each chunk.
+3. The client includes one or more `media_id` values in the `media_ids` field
+   of `POST /chat/{chat_id}/message` to attach uploaded media to a message.
+4. Other clients fetch attachment metadata from the message payload and download
+   chunks via `GET /media/download/{media_id}`.
+
+All media files are **encrypted client-side** before upload; the server stores
+opaque encrypted blobs and never decrypts them.
+
+### Chunking
+
+Files **must** be sharded into upload envelopes where:
+
+`encrypted_chunk_bytes + chunk_metadata_bytes <= 256 MiB` (`268435456` bytes)
+
+For this API, `chunk_metadata_bytes` means the multipart/form-data metadata for
+that chunk request (`upload_id`, `chat_id`, `mime_type`, `nonce`,
+`chunk_index`, `total_chunks`, and form boundaries/headers). Clients must keep
+metadata small enough that the full envelope stays within 256 MiB.
+
+If the uploaded envelope exceeds this limit, the server rejects the request with
+`413`. Clients generate a unique `upload_id` (UUID) to group chunks belonging
+to the same logical file, and specify `chunk_index` (0-based) and
+`total_chunks` for each part.
+
+### Streaming Pipeline (Contract)
+
+Upload pipeline (client -> server):
+
+1. Media file -> split into ordered chunks.
+2. For each chunk, build metadata envelope (`upload_id`, `chunk_index`,
+  `total_chunks`, `chat_id`, `mime_type`, `nonce`).
+3. Encrypt chunk bytes client-side.
+4. Stream each encrypted envelope via `POST /media/upload` (multipart request
+  per chunk).
+5. Collect returned `media_id` values for message attachment.
+
+Download pipeline (server -> client):
+
+1. Read message `attachments[]`.
+2. For each attachment, read `chunks[]` metadata and stream each part via
+  `GET /media/download/{media_id}`.
+3. Reassemble downloaded chunks by `chunk_index`.
+4. Decrypt reassembled encrypted blob client-side using the attachment `nonce`.
+
+---
+
+### POST /media/upload
+
+Uploads a single encrypted chunk envelope of media data (streamed).
+
+**Auth:** required
+
+**Content-Type:** `multipart/form-data`
+
+**Form fields**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | yes | The encrypted binary chunk payload |
+| `chat_id` | integer | yes | Chat this media belongs to |
+| `mime_type` | string | yes | MIME type of the original file (e.g. `image/png`) |
+| `nonce` | string | yes | Client-side encryption nonce (base64) |
+| `chunk_index` | integer | no | 0-based index of this chunk (default `0`) |
+| `total_chunks` | integer | no | Total number of chunks for this upload (default `1`) |
+| `upload_id` | string | yes | Client-generated UUID grouping all chunks of one file |
+
+**Response — 201 Created**
+```json
+{
+  "media_id": 10,
+  "upload_id": "uuid-string",
+  "chunk_index": 0,
+  "chunks_uploaded": 1,
+  "total_chunks": 3,
+  "complete": false
+}
+```
+
+Errors:
+- `401` — unauthorized
+- `404` — chat not found or user is not a member
+- `400` — invalid chunk_index or total_chunks
+- `400` — empty file
+- `409` — chunk already uploaded
+- `413` — upload envelope (`encrypted chunk + metadata`) exceeds 256 MiB
+
+---
+
+### GET /media/{media_id}/meta
+
+Returns metadata for a media upload, including all chunk information.
+
+**Auth:** required
+
+**Path parameters**
+- `media_id` — integer (any chunk id from the upload)
+
+**Response — 200 OK**
+```json
+{
+  "upload_id": "uuid-string",
+  "mime_type": "video/mp4",
+  "total_chunks": 3,
+  "nonce": "base64-string",
+  "chunks": [
+    {
+      "media_id": 10,
+      "chunk_index": 0,
+      "file_size": 268435456
+    },
+    {
+      "media_id": 11,
+      "chunk_index": 1,
+      "file_size": 268435456
+    },
+    {
+      "media_id": 12,
+      "chunk_index": 2,
+      "file_size": 52428800
+    }
+  ]
+}
+```
+
+Errors:
+- `401` — unauthorized
+- `404` — media not found or user is not a member of the chat
+
+---
+
+### GET /media/download/{media_id}
+
+Streams the raw encrypted bytes of a single media chunk.
+
+**Auth:** required
+
+**Path parameters**
+- `media_id` — integer
+
+**Response — 200 OK**
+
+Binary file download (`application/octet-stream`).
+
+Errors:
+- `401` — unauthorized
+- `404` — media not found or user is not a member of the chat
+- `404` — file not found on disk
 
 ---
 
@@ -663,3 +931,6 @@ Errors:
   endpoint and retrieved individually via `/chat/{chat_id}/{epoch_id}/fetch`.
 - Clients should cache epoch keys locally and only request epoch keys for
   epochs they have not yet decrypted.
+- Media files are stored as encrypted blobs. The server never decrypts media.
+  Clients are responsible for encrypting media before upload and decrypting
+  after download using the nonce associated with each upload.

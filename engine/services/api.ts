@@ -267,4 +267,13 @@ export async function healthCheck(): Promise<{ PING: string }> {
   return response.json();
 }
 
+export async function checkVersion(): Promise<{ version: string }> {
+  const baseUrl = await getApiBaseUrl();
+  const response = await fetch(`${baseUrl}${ENDPOINTS.VERSION}`);
+  if (!response.ok) {
+    throw new Error(`Version check failed with status ${response.status}`);
+  }
+  return response.json();
+}
+
 export { ApiError };

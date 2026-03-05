@@ -56,7 +56,17 @@ export const ENDPOINTS = {
   CHAT_EPOCH: "/chat/{chat_id}/epoch",
   CHAT_FETCH_EPOCH: "/chat/{chat_id}/{epoch_id}/fetch",
   CHAT_MESSAGE: "/chat/{chat_id}/message",
+
+  // Server version
+  VERSION: "/version",
 } as const;
+
+// Server version compatibility ranges
+// "Reachable" when version is within [min, max] (inclusive)
+// "Outdated" when /version endpoint is missing (old server)
+// "Incompatible" when version is outside the compatible range
+export const COMPATIBLE_VERSION_MIN = 50;
+export const COMPATIBLE_VERSION_MAX = 60;
 
 // Message limits
 export const MESSAGE_FETCH_LIMIT = 50;

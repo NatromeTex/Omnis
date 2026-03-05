@@ -24,9 +24,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import QRCode from "react-native-qrcode-svg";
 import { Button, Header, Input, SettingsItem } from "../components";
 import { useApp } from "../context";
-import { healthCheck } from "../services/api";
+import { checkVersion, healthCheck } from "../services/api";
 import { clearLogs, getLogText, subscribeLogs } from "../services/logging";
-import { APP_VERSION } from "../constants";
+import { APP_VERSION, COMPATIBLE_VERSION_MIN, COMPATIBLE_VERSION_MAX } from "../constants";
 import { Colors } from "../theme";
 import type { RootStackParamList } from "../types";
 
@@ -54,7 +54,7 @@ export function SettingsScreen() {
   const [isTesting, setIsTesting] = useState(false);
   const [logText, setLogText] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<
-    "idle" | "reachable" | "unreachable"
+    "idle" | "reachable" | "unreachable" | "outdated" | "incompatible"
   >("idle");
 
   // Swipe right to go back
@@ -76,8 +76,28 @@ export function SettingsScreen() {
     setConnectionStatus("idle");
     try {
       await healthCheck();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setConnectionStatus("reachable");
+
+      // Server is reachable — now check version compatibility
+      try {
+        const { version } = await checkVersion();
+        const versionNum = Number(version);
+
+        if (
+          !Number.isNaN(versionNum) &&
+          versionNum >= COMPATIBLE_VERSION_MIN &&
+          versionNum <= COMPATIBLE_VERSION_MAX
+        ) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setConnectionStatus("reachable");
+        } else {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          setConnectionStatus("incompatible");
+        }
+      } catch {
+        // /version endpoint missing → server is outdated
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        setConnectionStatus("outdated");
+      }
     } catch {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setConnectionStatus("unreachable");
@@ -104,7 +124,10 @@ export function SettingsScreen() {
     await setApiBaseUrl(cleanUrl);
     setShowUrlModal(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [urlInput, setApiBaseUrl]);
+
+    // Auto-test the new URL
+    setTimeout(() => handleTestConnection(), 0);
+  }, [urlInput, setApiBaseUrl, handleTestConnection]);
 
   const handleSelectColor = useCallback(
     async (color: string) => {
@@ -199,16 +222,23 @@ export function SettingsScreen() {
                   ? "Testing..."
                   : connectionStatus === "reachable"
                     ? "Reachable"
-                    : connectionStatus === "unreachable"
-                      ? "Not reachable"
-                      : "Tap to test"
+                    : connectionStatus === "outdated"
+                      ? "Outdated"
+                      : connectionStatus === "incompatible"
+                        ? "Incompatible"
+                        : connectionStatus === "unreachable"
+                          ? "Not reachable"
+                          : "Tap to test"
               }
               valueColor={
                 connectionStatus === "reachable"
                   ? "#4CAF50"
-                  : connectionStatus === "unreachable"
-                    ? "#F44336"
-                    : undefined
+                  : connectionStatus === "outdated"
+                    ? "#FFC107"
+                    : connectionStatus === "incompatible" ||
+                        connectionStatus === "unreachable"
+                      ? "#F44336"
+                      : undefined
               }
               onPress={handleTestConnection}
             />
