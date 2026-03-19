@@ -9,7 +9,9 @@ import Animated, { FadeInUp } from "react-native-reanimated";
 import { findPhoneNumbersInText } from "libphonenumber-js";
 import type { CountryCode } from "libphonenumber-js";
 import { Colors } from "../theme";
+import type { MessageAttachment, MessageMediaMeta } from "../types";
 import { ReplyPreview } from "./ReplyPreview";
+import { AttachmentRenderer } from "./media/AttachmentRenderer";
 
 interface TextPart {
   text: string;
@@ -70,6 +72,18 @@ interface MessageBubbleProps {
   replySender?: string | null;
   /** Callback when the reply preview is tapped */
   onReplyPress?: () => void;
+  /** Server-side attachment metadata */
+  attachments?: MessageAttachment[];
+  /** Parsed media metadata from decrypted ciphertext */
+  mediaMeta?: MessageMediaMeta | null;
+  /** Map of upload_id → decrypted local file path */
+  decryptedPaths?: Map<string, string>;
+  /** Map of upload_id → video thumbnail path */
+  thumbnailPaths?: Map<string, string>;
+  /** Called when user taps to download an attachment */
+  onDownloadAttachment?: (attachment: MessageAttachment) => void;
+  /** Called when user taps to save a decrypted file */
+  onSaveAttachment?: (uploadId: string, fileName: string, mimeType: string) => void;
 }
 
 export function MessageBubble({
@@ -80,6 +94,12 @@ export function MessageBubble({
   replyText,
   replySender,
   onReplyPress,
+  attachments,
+  mediaMeta,
+  decryptedPaths,
+  thumbnailPaths,
+  onDownloadAttachment,
+  onSaveAttachment,
 }: MessageBubbleProps) {
   const defaultCountry = React.useMemo(getDefaultCountryFromLocale, []);
 
@@ -219,6 +239,17 @@ export function MessageBubble({
             onPress={onReplyPress}
           />
         ) : null}
+        {attachments && attachments.length > 0 && (
+          <AttachmentRenderer
+            attachments={attachments}
+            mediaMeta={mediaMeta}
+            decryptedPaths={decryptedPaths}
+            thumbnailPaths={thumbnailPaths}
+            onDownload={onDownloadAttachment}
+            onSave={onSaveAttachment}
+          />
+        )}
+        {message ? (
         <Text style={styles.message}>
           {messageParts.map((part, partIndex) => {
             if (!part.linkType || !part.linkValue) {
@@ -244,6 +275,7 @@ export function MessageBubble({
             );
           })}
         </Text>
+        ) : null}
         <Text style={styles.timestamp}>{formatTime(timestamp)}</Text>
       </View>
     </Animated.View>

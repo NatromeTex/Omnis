@@ -15,3 +15,14 @@ export { SessionItem } from "./SessionItem";
 export { SettingsItem } from "./SettingsItem";
 export { Toast } from "./Toast";
 
+// Media components
+export {
+  ImageComponent,
+  VideoComponent,
+  AudioComponent,
+  PdfComponent,
+  GenericFileComponent,
+  AttachmentRenderer,
+  AttachmentUploadProgress,
+} from "./media";
+

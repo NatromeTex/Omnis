@@ -332,3 +332,62 @@ export async function searchChats(query: string): Promise<LocalChat[]> {
     chat.with_user.toLowerCase().includes(lowercaseQuery),
   );
 }
+
+// ============ Media Transfer Operations (stubs for web) ============
+
+export async function upsertMediaTransfer(_transfer: {
+  upload_id: string;
+  chat_id: number;
+  message_id?: number | null;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  file_key?: string | null;
+  nonce?: string | null;
+  status: string;
+  progress?: number;
+  chunks_completed?: number;
+  total_chunks?: number;
+  media_ids?: number[];
+  local_uri?: string | null;
+  decrypted_path?: string | null;
+  error?: string | null;
+}): Promise<void> {
+  // No-op for web — native file caching not supported
+}
+
+export async function getMediaTransfer(_uploadId: string): Promise<null> {
+  return null;
+}
+
+export async function getMediaTransfersForChat(_chatId: number): Promise<[]> {
+  return [];
+}
+
+export async function updateMediaTransferStatus(
+  _uploadId: string,
+  _status: string,
+  _progress?: number,
+  _error?: string | null,
+): Promise<void> {
+  // No-op for web
+}
+
+export async function updateMediaTransferDecryptedPath(
+  _uploadId: string,
+  _decryptedPath: string,
+): Promise<void> {
+  // No-op for web
+}
+
+export async function getCompletedMediaTransfers(_chatId: number): Promise<Map<string, string>> {
+  return new Map();
+}
+
+export async function insertMessageWithAttachments(message: LocalMessage): Promise<void> {
+  await insertMessage(message);
+}
+
+export async function getMessageWithAttachments(messageId: number): Promise<LocalMessage | null> {
+  return getMessage(messageId);
+}

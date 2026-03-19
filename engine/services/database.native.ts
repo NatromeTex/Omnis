@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Local Database Service - Native implementation
  * SQLite database for offline chat storage
  */
@@ -7,11 +7,23 @@ import * as SQLite from "expo-sqlite";
 import type { LocalChat, LocalMessage } from "../types";
 
 let db: SQLite.SQLiteDatabase | null = null;
+let dbInitPromise: Promise<void> | null = null;
 
 /**
- * Initialize the database
+ * Initialize the database (idempotent â€” safe to call multiple times).
  */
 export async function initDatabase(): Promise<void> {
+  if (db) return;
+  if (dbInitPromise) return dbInitPromise;
+  dbInitPromise = _openAndMigrate();
+  try {
+    await dbInitPromise;
+  } finally {
+    dbInitPromise = null;
+  }
+}
+
+async function _openAndMigrate(): Promise<void> {
   db = await SQLite.openDatabaseAsync("omnis.db");
 
   // Create tables
@@ -53,6 +65,31 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_epochs_chat_id ON epochs(chat_id);
+
+    CREATE TABLE IF NOT EXISTS media_transfers (
+      upload_id TEXT PRIMARY KEY,
+      chat_id INTEGER NOT NULL,
+      message_id INTEGER,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      file_key TEXT,
+      nonce TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      progress REAL NOT NULL DEFAULT 0,
+      chunks_completed INTEGER NOT NULL DEFAULT 0,
+      total_chunks INTEGER NOT NULL DEFAULT 0,
+      media_ids TEXT,
+      local_uri TEXT,
+      decrypted_path TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_media_transfers_chat_id ON media_transfers(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_media_transfers_message_id ON media_transfers(message_id);
+    CREATE INDEX IF NOT EXISTS idx_media_transfers_status ON media_transfers(status);
   `);
 
   // Migrate: add reply_id column if missing (existing installs)
@@ -61,18 +98,27 @@ export async function initDatabase(): Promise<void> {
       `ALTER TABLE messages ADD COLUMN reply_id INTEGER`,
     );
   } catch {
-    // Column already exists — ignore
+    // Column already exists â€” ignore
+  }
+
+  // Migrate: add attachments_json column for media metadata
+  try {
+    await db.runAsync(
+      `ALTER TABLE messages ADD COLUMN attachments_json TEXT`,
+    );
+  } catch {
+    // Column already exists â€” ignore
   }
 }
 
 /**
- * Get database instance
+ * Get database instance, auto-reinitializing if the connection was lost.
  */
-function getDb(): SQLite.SQLiteDatabase {
+async function ensureDb(): Promise<SQLite.SQLiteDatabase> {
   if (!db) {
-    throw new Error("Database not initialized. Call initDatabase() first.");
+    await initDatabase();
   }
-  return db;
+  return db!;
 }
 
 // ============ Chat Operations ============
@@ -81,7 +127,7 @@ function getDb(): SQLite.SQLiteDatabase {
  * Upsert a chat
  */
 export async function upsertChat(chat: LocalChat): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(
     `INSERT INTO chats (chat_id, with_user, with_user_id, last_message, last_message_time, unread_count)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -106,7 +152,7 @@ export async function upsertChat(chat: LocalChat): Promise<void> {
  * Get all chats
  */
 export async function getChats(): Promise<LocalChat[]> {
-  const database = getDb();
+  const database = await ensureDb();
   const rows = await database.getAllAsync<LocalChat>(
     `SELECT c.chat_id, c.with_user, c.with_user_id, c.unread_count,
        COALESCE(c.last_message,
@@ -125,7 +171,7 @@ export async function getChats(): Promise<LocalChat[]> {
  * Get a single chat
  */
 export async function getChat(chatId: number): Promise<LocalChat | null> {
-  const database = getDb();
+  const database = await ensureDb();
   const row = await database.getFirstAsync<LocalChat>(
     `SELECT * FROM chats WHERE chat_id = ?`,
     [chatId],
@@ -141,7 +187,7 @@ export async function updateChatLastMessage(
   lastMessage: string,
   lastMessageTime: string,
 ): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(
     `UPDATE chats SET last_message = ?, last_message_time = ? WHERE chat_id = ?`,
     [lastMessage, lastMessageTime, chatId],
@@ -155,7 +201,7 @@ export async function updateUnreadCount(
   chatId: number,
   count: number,
 ): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(
     `UPDATE chats SET unread_count = ? WHERE chat_id = ?`,
     [count, chatId],
@@ -175,10 +221,11 @@ export async function clearUnreadCount(chatId: number): Promise<void> {
  * Insert a message
  */
 export async function insertMessage(message: LocalMessage): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
+  const attachmentsJson = message.attachments ? JSON.stringify(message.attachments) : null;
   await database.runAsync(
-    `INSERT OR REPLACE INTO messages (id, chat_id, sender_id, epoch_id, reply_id, ciphertext, nonce, plaintext, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_id, sender_id, epoch_id, reply_id, ciphertext, nonce, plaintext, created_at, synced, attachments_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.id,
       message.chat_id,
@@ -190,6 +237,7 @@ export async function insertMessage(message: LocalMessage): Promise<void> {
       message.plaintext ?? null,
       message.created_at,
       message.synced ? 1 : 0,
+      attachmentsJson,
     ],
   );
 }
@@ -198,12 +246,17 @@ export async function insertMessage(message: LocalMessage): Promise<void> {
  * Get a single message by ID
  */
 export async function getMessage(messageId: number): Promise<LocalMessage | null> {
-  const database = getDb();
-  const row = await database.getFirstAsync<LocalMessage>(
+  const database = await ensureDb();
+  const row = await database.getFirstAsync<any>(
     `SELECT * FROM messages WHERE id = ?`,
     [messageId],
   );
-  return row;
+  if (!row) return null;
+  return {
+    ...row,
+    synced: !!row.synced,
+    attachments: row.attachments_json ? JSON.parse(row.attachments_json) : undefined,
+  };
 }
 
 /**
@@ -214,7 +267,7 @@ export async function getMessages(
   limit: number = 50,
   beforeId?: number,
 ): Promise<LocalMessage[]> {
-  const database = getDb();
+  const database = await ensureDb();
   let query = `SELECT * FROM messages WHERE chat_id = ?`;
   const params: (number | string)[] = [chatId];
 
@@ -226,8 +279,12 @@ export async function getMessages(
   query += ` ORDER BY created_at DESC LIMIT ?`;
   params.push(limit);
 
-  const rows = await database.getAllAsync<LocalMessage>(query, params);
-  return rows.reverse(); // Return in chronological order
+  const rows = await database.getAllAsync<any>(query, params);
+  return rows.reverse().map((row: any) => ({
+    ...row,
+    synced: !!row.synced,
+    attachments: row.attachments_json ? JSON.parse(row.attachments_json) : undefined,
+  }));
 }
 
 /**
@@ -236,7 +293,7 @@ export async function getMessages(
 export async function getLatestMessageId(
   chatId: number,
 ): Promise<number | null> {
-  const database = getDb();
+  const database = await ensureDb();
   const row = await database.getFirstAsync<{ max_id: number | null }>(
     `SELECT MAX(id) as max_id FROM messages WHERE chat_id = ?`,
     [chatId],
@@ -251,7 +308,7 @@ export async function updateMessagePlaintext(
   messageId: number,
   plaintext: string,
 ): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(`UPDATE messages SET plaintext = ? WHERE id = ?`, [
     plaintext,
     messageId,
@@ -262,7 +319,7 @@ export async function updateMessagePlaintext(
  * Get unsynced messages
  */
 export async function getUnsyncedMessages(): Promise<LocalMessage[]> {
-  const database = getDb();
+  const database = await ensureDb();
   const rows = await database.getAllAsync<LocalMessage>(
     `SELECT * FROM messages WHERE synced = 0 ORDER BY created_at ASC`,
   );
@@ -273,7 +330,7 @@ export async function getUnsyncedMessages(): Promise<LocalMessage[]> {
  * Mark message as synced
  */
 export async function markMessageSynced(messageId: number): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(`UPDATE messages SET synced = 1 WHERE id = ?`, [
     messageId,
   ]);
@@ -299,7 +356,7 @@ export async function upsertEpoch(
   wrappedKey: string,
   unwrappedKey?: string,
 ): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(
     `INSERT OR REPLACE INTO epochs (epoch_id, chat_id, epoch_index, wrapped_key, unwrapped_key)
      VALUES (?, ?, ?, ?, ?)`,
@@ -311,7 +368,7 @@ export async function upsertEpoch(
  * Get epoch by ID
  */
 export async function getEpoch(epochId: number): Promise<EpochData | null> {
-  const database = getDb();
+  const database = await ensureDb();
   return database.getFirstAsync(`SELECT * FROM epochs WHERE epoch_id = ?`, [
     epochId,
   ]);
@@ -323,7 +380,7 @@ export async function getEpoch(epochId: number): Promise<EpochData | null> {
 export async function getLatestEpoch(
   chatId: number,
 ): Promise<EpochData | null> {
-  const database = getDb();
+  const database = await ensureDb();
   return database.getFirstAsync(
     `SELECT * FROM epochs WHERE chat_id = ? ORDER BY epoch_index DESC LIMIT 1`,
     [chatId],
@@ -337,7 +394,7 @@ export async function storeUnwrappedEpochKey(
   epochId: number,
   unwrappedKey: string,
 ): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(
     `UPDATE epochs SET unwrapped_key = ? WHERE epoch_id = ?`,
     [unwrappedKey, epochId],
@@ -350,7 +407,7 @@ export async function storeUnwrappedEpochKey(
  * Clear all data for a specific chat
  */
 export async function clearChatData(chatId: number): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
   await database.runAsync(`DELETE FROM epochs WHERE chat_id = ?`, [chatId]);
   await database.runAsync(`DELETE FROM chats WHERE chat_id = ?`, [chatId]);
@@ -360,7 +417,7 @@ export async function clearChatData(chatId: number): Promise<void> {
  * Clear all local data
  */
 export async function clearAllData(): Promise<void> {
-  const database = getDb();
+  const database = await ensureDb();
   await database.runAsync(`DELETE FROM messages`);
   await database.runAsync(`DELETE FROM epochs`);
   await database.runAsync(`DELETE FROM chats`);
@@ -373,6 +430,7 @@ export async function closeDatabase(): Promise<void> {
   if (db) {
     await db.closeAsync();
     db = null;
+    dbInitPromise = null;
   }
 }
 
@@ -380,7 +438,7 @@ export async function closeDatabase(): Promise<void> {
  * Search chats by username
  */
 export async function searchChats(query: string): Promise<LocalChat[]> {
-  const database = getDb();
+  const database = await ensureDb();
   const rows = await database.getAllAsync<LocalChat>(
     `SELECT c.chat_id, c.with_user, c.with_user_id, c.unread_count,
        COALESCE(c.last_message,
@@ -395,4 +453,195 @@ export async function searchChats(query: string): Promise<LocalChat[]> {
     [`%${query}%`],
   );
   return rows;
+}
+
+// ============ Media Transfer Operations ============
+
+interface MediaTransferRow {
+  upload_id: string;
+  chat_id: number;
+  message_id: number | null;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  file_key: string | null;
+  nonce: string | null;
+  status: string;
+  progress: number;
+  chunks_completed: number;
+  total_chunks: number;
+  media_ids: string | null;
+  local_uri: string | null;
+  decrypted_path: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+/**
+ * Insert or update a media transfer record
+ */
+export async function upsertMediaTransfer(transfer: {
+  upload_id: string;
+  chat_id: number;
+  message_id?: number | null;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  file_key?: string | null;
+  nonce?: string | null;
+  status: string;
+  progress?: number;
+  chunks_completed?: number;
+  total_chunks?: number;
+  media_ids?: number[];
+  local_uri?: string | null;
+  decrypted_path?: string | null;
+  error?: string | null;
+}): Promise<void> {
+  const database = await ensureDb();
+  const mediaIdsJson = transfer.media_ids ? JSON.stringify(transfer.media_ids) : null;
+  await database.runAsync(
+    `INSERT INTO media_transfers (upload_id, chat_id, message_id, file_name, mime_type, file_size,
+       file_key, nonce, status, progress, chunks_completed, total_chunks, media_ids,
+       local_uri, decrypted_path, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(upload_id) DO UPDATE SET
+       message_id = COALESCE(excluded.message_id, media_transfers.message_id),
+       status = excluded.status,
+       progress = excluded.progress,
+       chunks_completed = excluded.chunks_completed,
+       total_chunks = excluded.total_chunks,
+       media_ids = COALESCE(excluded.media_ids, media_transfers.media_ids),
+       decrypted_path = COALESCE(excluded.decrypted_path, media_transfers.decrypted_path),
+       error = excluded.error`,
+    [
+      transfer.upload_id,
+      transfer.chat_id,
+      transfer.message_id ?? null,
+      transfer.file_name,
+      transfer.mime_type,
+      transfer.file_size,
+      transfer.file_key ?? null,
+      transfer.nonce ?? null,
+      transfer.status,
+      transfer.progress ?? 0,
+      transfer.chunks_completed ?? 0,
+      transfer.total_chunks ?? 0,
+      mediaIdsJson,
+      transfer.local_uri ?? null,
+      transfer.decrypted_path ?? null,
+      transfer.error ?? null,
+    ],
+  );
+}
+
+/**
+ * Get a media transfer by upload_id
+ */
+export async function getMediaTransfer(uploadId: string): Promise<MediaTransferRow | null> {
+  const database = await ensureDb();
+  return database.getFirstAsync<MediaTransferRow>(
+    `SELECT * FROM media_transfers WHERE upload_id = ?`,
+    [uploadId],
+  );
+}
+
+/**
+ * Get all media transfers for a chat
+ */
+export async function getMediaTransfersForChat(chatId: number): Promise<MediaTransferRow[]> {
+  const database = await ensureDb();
+  return database.getAllAsync<MediaTransferRow>(
+    `SELECT * FROM media_transfers WHERE chat_id = ? ORDER BY created_at DESC`,
+    [chatId],
+  );
+}
+
+/**
+ * Update media transfer status
+ */
+export async function updateMediaTransferStatus(
+  uploadId: string,
+  status: string,
+  progress?: number,
+  error?: string | null,
+): Promise<void> {
+  const database = await ensureDb();
+  await database.runAsync(
+    `UPDATE media_transfers SET status = ?, progress = COALESCE(?, progress), error = ? WHERE upload_id = ?`,
+    [status, progress ?? null, error ?? null, uploadId],
+  );
+}
+
+/**
+ * Update decrypted path for a media transfer
+ */
+export async function updateMediaTransferDecryptedPath(
+  uploadId: string,
+  decryptedPath: string,
+): Promise<void> {
+  const database = await ensureDb();
+  await database.runAsync(
+    `UPDATE media_transfers SET decrypted_path = ?, status = 'completed' WHERE upload_id = ?`,
+    [decryptedPath, uploadId],
+  );
+}
+
+/**
+ * Insert a message with attachments JSON
+ */
+export async function insertMessageWithAttachments(message: LocalMessage): Promise<void> {
+  const database = await ensureDb();
+  const attachmentsJson = message.attachments ? JSON.stringify(message.attachments) : null;
+  await database.runAsync(
+    `INSERT OR REPLACE INTO messages (id, chat_id, sender_id, epoch_id, reply_id, ciphertext, nonce, plaintext, created_at, synced, attachments_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      message.id,
+      message.chat_id,
+      message.sender_id,
+      message.epoch_id,
+      message.reply_id ?? null,
+      message.ciphertext,
+      message.nonce,
+      message.plaintext ?? null,
+      message.created_at,
+      message.synced ? 1 : 0,
+      attachmentsJson,
+    ],
+  );
+}
+
+/**
+ * Get a message with its attachments parsed from JSON
+ */
+export async function getMessageWithAttachments(messageId: number): Promise<LocalMessage | null> {
+  const database = await ensureDb();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM messages WHERE id = ?`,
+    [messageId],
+  );
+  if (!row) return null;
+  return {
+    ...row,
+    synced: !!row.synced,
+    attachments: row.attachments_json ? JSON.parse(row.attachments_json) : undefined,
+  };
+}
+
+/**
+ * Get completed media transfer decrypted paths for a chat.
+ * Returns a map of upload_id â†’ decrypted file path.
+ */
+export async function getCompletedMediaTransfers(chatId: number): Promise<Map<string, string>> {
+  const database = await ensureDb();
+  const rows = await database.getAllAsync<{ upload_id: string; decrypted_path: string }>(
+    `SELECT upload_id, decrypted_path FROM media_transfers WHERE chat_id = ? AND status = 'completed' AND decrypted_path IS NOT NULL`,
+    [chatId],
+  );
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    map.set(row.upload_id, row.decrypted_path);
+  }
+  return map;
 }

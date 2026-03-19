@@ -13,7 +13,6 @@ import type {
     SignupRequest,
     User,
 } from "../types";
-import { clearAllData } from "./database";
 import { getApiBaseUrl, getAuthToken, getDeviceId, clearAuthToken, clearCurrentUser } from "./storage";
 import { Platform } from "react-native";
 
@@ -74,13 +73,12 @@ async function request<T>(
     }
 
     if (response.status === 401 && requiresAuth) {
-      console.warn("[API] Auth broken, clearing local database for security");
+      console.warn("[API] Auth broken (401), clearing auth tokens");
       try {
-        await clearAllData();
         await clearAuthToken();
         await clearCurrentUser();
       } catch (clearError) {
-        console.error("[API] Failed to clear data on auth error:", clearError);
+        console.error("[API] Failed to clear auth on 401:", clearError);
       }
     }
 
@@ -230,7 +228,7 @@ export async function fetchEpochKey(
 export async function sendMessage(
   chatId: number,
   data: SendMessageRequest,
-): Promise<{ id: number; epoch_id: number; created_at: string }> {
+): Promise<{ id: number; epoch_id: number; created_at: string; attachments?: any[] }> {
   const endpoint = ENDPOINTS.CHAT_MESSAGE.replace(
     "{chat_id}",
     chatId.toString(),
@@ -239,6 +237,7 @@ export async function sendMessage(
     id: number;
     epoch_id: number;
     created_at: string;
+    attachments?: any[];
   }>(
     endpoint,
     {

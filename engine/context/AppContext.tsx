@@ -23,6 +23,7 @@ import {
     generateIdentityKeyPair,
 } from "../services/crypto";
 import { clearAllData, initDatabase } from "../services/database";
+import { initMediaNotifications } from "../services/mediaNotifications";
 import {
     addUrlToHistory,
     clearAuthToken,
@@ -152,6 +153,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         // Initialize database
         await initDatabase();
+
+        // Initialize notification channels for media transfers
+        await initMediaNotifications();
 
         // Get device ID
         const deviceId = await getDeviceId();

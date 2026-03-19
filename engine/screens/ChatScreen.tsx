@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp, NativeStackScreenProps } from "@react-navigation/native-stack";
+import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -24,10 +25,19 @@ import Animated, {
     withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Avatar, MessageBubble, MessageInput, ReplyPreview, Toast } from "../components";
+import { Avatar, MessageBubble, MessageInput, ReplyPreview, Toast, AttachmentUploadProgress } from "../components";
 import { useApp, useChat } from "../context";
+import { getCompletedMediaTransfers, upsertMediaTransfer } from "../services/database";
+import { mediaManager } from "../services/mediaManager";
 import { Colors } from "../theme";
-import type { LocalMessage, RootStackParamList } from "../types";
+import type { LocalMessage, MessageAttachment, MediaTransferProgress, PendingAttachment, RootStackParamList } from "../types";
+import { getMediaType } from "../types";
+
+/** Extract display text from a message, handling both plain text and media messages */
+function getDisplayText(msg: LocalMessage): string {
+  if (!msg.plaintext) return "[Encrypted]";
+  return mediaManager.getDisplayText(msg.plaintext);
+}
 
 function SwipeableMessageRow({
   item,
@@ -37,6 +47,10 @@ function SwipeableMessageRow({
   replySender,
   onReplyPress,
   onSwipeReply,
+  decryptedPaths,
+  thumbnailPaths,
+  onDownloadAttachment,
+  onSaveAttachment,
 }: {
   item: LocalMessage;
   index: number;
@@ -45,6 +59,10 @@ function SwipeableMessageRow({
   replySender?: string | null;
   onReplyPress?: () => void;
   onSwipeReply: (message: LocalMessage) => void;
+  decryptedPaths?: Map<string, string>;
+  thumbnailPaths?: Map<string, string>;
+  onDownloadAttachment?: (attachment: MessageAttachment) => void;
+  onSaveAttachment?: (uploadId: string, fileName: string, mimeType: string) => void;
 }) {
   const translateX = useSharedValue(0);
   const iconOpacity = useSharedValue(0);
@@ -82,13 +100,19 @@ function SwipeableMessageRow({
       <GestureDetector gesture={swipeGesture}>
         <Animated.View style={[styles.swipeableContent, rowStyle]}>
           <MessageBubble
-            message={item.plaintext || "[Encrypted]"}
+            message={getDisplayText(item)}
             timestamp={item.created_at}
             isSent={isSent}
             index={index}
             replyText={replyText}
             replySender={replySender}
             onReplyPress={onReplyPress}
+            attachments={item.attachments}
+            mediaMeta={item.mediaMeta}
+            decryptedPaths={decryptedPaths}
+            thumbnailPaths={thumbnailPaths}
+            onDownloadAttachment={onDownloadAttachment}
+            onSaveAttachment={onSaveAttachment}
           />
         </Animated.View>
       </GestureDetector>
@@ -106,7 +130,7 @@ export function ChatScreen() {
   const isNearBottomRef = useRef(true);
   const previousMessageCountRef = useRef(0);
   const { auth } = useApp();
-  const { messages, isSending, openChat, closeChat, sendMessage } = useChat();
+  const { messages, isSending, openChat, closeChat, sendMessage, getEpochKeyForChat } = useChat();
 
   // Reply state
   const [replyTo, setReplyTo] = useState<LocalMessage | null>(null);
@@ -114,12 +138,172 @@ export function ChatScreen() {
   // Toast state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Media attachment state
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [decryptedPaths, setDecryptedPaths] = useState<Map<string, string>>(new Map());
+  const [thumbnailPaths, setThumbnailPaths] = useState<Map<string, string>>(new Map());
+
   // Composer (reply preview + input) height for bottom padding + overlap
   const [composerHeight, setComposerHeight] = useState(72);
   const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
     const next = Math.ceil(event.nativeEvent.layout.height);
     setComposerHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
   }, []);
+
+  // Subscribe to media upload/download progress
+  useEffect(() => {
+    const unsub = mediaManager.subscribe((progress: MediaTransferProgress) => {
+      setPendingAttachments((prev) =>
+        prev.map((pa) =>
+          pa.uploadId === progress.uploadId
+            ? { ...pa, status: progress.status, progress: progress.progress }
+            : pa,
+        ),
+      );
+    });
+    return unsub;
+  }, []);
+
+  // Attachment picker handler
+  const handleAttachPress = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const newPending: PendingAttachment[] = [];
+
+      for (const asset of result.assets) {
+        const { pending } = await mediaManager.prepareUpload(
+          asset.uri,
+          asset.name,
+          asset.mimeType || "application/octet-stream",
+          asset.size || 0,
+        );
+        newPending.push(pending);
+      }
+
+      setPendingAttachments((prev) => [...prev, ...newPending]);
+    } catch (error: any) {
+      console.error("[ChatScreen] attachment picker error:", error);
+      setToastMessage("Failed to pick file");
+    }
+  }, []);
+
+  // Remove a pending attachment
+  const handleRemoveAttachment = useCallback((uploadId: string) => {
+    mediaManager.cancelUpload(uploadId);
+    setPendingAttachments((prev) => prev.filter((pa) => pa.uploadId !== uploadId));
+  }, []);
+
+  // Build a lookup from upload_id → { epochId, legacyFileKey?, legacyNonce? }
+  // For old messages with mediaMeta: use file_key from mediaMeta (backward compat)
+  // For new/website messages: use epoch key + attachment.nonce
+  const attachmentEpochMap = useMemo(() => {
+    const map = new Map<string, { epochId: number; legacyFileKey?: string; legacyNonce?: string }>();
+    for (const msg of messages) {
+      if (!msg.attachments || msg.attachments.length === 0) continue;
+      for (const att of msg.attachments) {
+        const entry: { epochId: number; legacyFileKey?: string; legacyNonce?: string } = {
+          epochId: msg.epoch_id,
+        };
+        // Check if this message has old-style mediaMeta with per-file keys
+        if (msg.mediaMeta?.attachments) {
+          const metaAtt = msg.mediaMeta.attachments.find((a) => a.upload_id === att.upload_id);
+          if (metaAtt?.file_key && metaAtt?.nonce) {
+            entry.legacyFileKey = metaAtt.file_key;
+            entry.legacyNonce = metaAtt.nonce;
+          }
+        }
+        map.set(att.upload_id, entry);
+      }
+    }
+    return map;
+  }, [messages]);
+
+  // Download an attachment using the epoch key (website-compatible pipeline)
+  const handleDownloadAttachment = useCallback(async (attachment: MessageAttachment) => {
+    try {
+      const info = attachmentEpochMap.get(attachment.upload_id);
+      if (!info) {
+        setToastMessage("Cannot decrypt — key unavailable");
+        return;
+      }
+
+      let decryptedPath: string;
+
+      // Backward compat: if old mediaMeta has per-file key, use it
+      if (info.legacyFileKey) {
+        setToastMessage("Downloading\u2026");
+        decryptedPath = await mediaManager.downloadAndDecrypt(
+          attachment,
+          info.legacyFileKey,
+          info.legacyNonce,
+        );
+      } else {
+        // Standard pipeline: use epoch key + attachment.nonce (from server)
+        const epochKey = await getEpochKeyForChat(info.epochId, chatId);
+        if (!epochKey) {
+          setToastMessage("Cannot decrypt — epoch key unavailable");
+          return;
+        }
+        setToastMessage("Downloading\u2026");
+        decryptedPath = await mediaManager.downloadAndDecrypt(
+          attachment,
+          epochKey,
+          attachment.nonce,
+        );
+      }
+
+      setDecryptedPaths((prev) => new Map(prev).set(attachment.upload_id, decryptedPath));
+      // Persist decrypted path to DB for cache persistence
+      await upsertMediaTransfer({
+        upload_id: attachment.upload_id,
+        chat_id: chatId,
+        file_name: attachment.upload_id,
+        mime_type: attachment.mime_type,
+        file_size: attachment.total_size,
+        status: "completed",
+        total_chunks: attachment.total_chunks,
+        chunks_completed: attachment.total_chunks,
+        progress: 1,
+        decrypted_path: decryptedPath,
+      });
+
+      // Generate video thumbnail
+      if (getMediaType(attachment.mime_type) === "video") {
+        try {
+          const thumb = await mediaManager.generateVideoThumbnail(decryptedPath);
+          if (thumb) {
+            setThumbnailPaths((prev) => new Map(prev).set(attachment.upload_id, thumb));
+          }
+        } catch { /* non-critical */ }
+      }
+
+      setToastMessage("Downloaded");
+    } catch (error: any) {
+      console.error("[ChatScreen] download error:", error);
+      setToastMessage("Download failed");
+    }
+  }, [attachmentEpochMap, getEpochKeyForChat, chatId]);
+
+  // Save a decrypted attachment to public storage
+  const handleSaveAttachment = useCallback(async (uploadId: string, fileName: string, mimeType: string) => {
+    try {
+      const path = decryptedPaths.get(uploadId);
+      if (!path) return;
+      await mediaManager.saveToPublicStorage(path, fileName, mimeType);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setToastMessage("Saved to gallery");
+    } catch (error: any) {
+      console.error("[ChatScreen] save error:", error);
+      setToastMessage("Failed to save");
+    }
+  }, [decryptedPaths]);
 
   // Build a lookup map: message id → LocalMessage (for reply previews)
   const messageMap = useMemo(() => {
@@ -152,7 +336,37 @@ export function ChatScreen() {
     hasInitialScrollDoneRef.current = false;
     isNearBottomRef.current = true;
     previousMessageCountRef.current = 0;
-    openChat(chatId);
+
+    // Load cached decrypted media paths from DB before messages arrive
+    const loadCachedMedia = async () => {
+      try {
+        const cached = await getCompletedMediaTransfers(chatId);
+        const validPaths = new Map<string, string>();
+        for (const [uploadId, path] of cached) {
+          try {
+            const info = await mediaManager.getFileInfo(path);
+            if (info.exists) {
+              validPaths.set(uploadId, path);
+              // Mark as already handled so auto-download skips these
+              autoDownloadedRef.current.add(uploadId);
+            }
+          } catch {
+            // File no longer exists — will be re-downloaded
+          }
+        }
+        if (validPaths.size > 0) {
+          setDecryptedPaths((prev) => {
+            const merged = new Map(prev);
+            for (const [k, v] of validPaths) merged.set(k, v);
+            return merged;
+          });
+        }
+      } catch (error) {
+        console.error("[ChatScreen] failed to load cached media:", error);
+      }
+    };
+
+    loadCachedMedia().then(() => openChat(chatId));
     return () => closeChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
@@ -195,6 +409,86 @@ export function ChatScreen() {
 
     previousMessageCountRef.current = currentCount;
   }, [orderedMessages.length]);
+
+  // Auto-download attachments for incoming messages that are below the threshold
+  const autoDownloadedRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const msg of orderedMessages) {
+      if (!msg.attachments || msg.attachments.length === 0) continue;
+
+      for (const att of msg.attachments) {
+        // Skip if already downloaded or already attempted
+        if (decryptedPaths.has(att.upload_id)) continue;
+        if (autoDownloadedRef.current.has(att.upload_id)) continue;
+
+        // Check auto-download threshold
+        if (!mediaManager.shouldAutoDownload(att.total_size)) continue;
+
+        autoDownloadedRef.current.add(att.upload_id);
+
+        // Check backward compat: old mediaMeta with per-file key
+        if (msg.mediaMeta?.attachments) {
+          const metaAtt = msg.mediaMeta.attachments.find(
+            (ma) => ma.upload_id === att.upload_id,
+          );
+          if (metaAtt?.file_key && metaAtt?.nonce) {
+            mediaManager.downloadAndDecrypt(att, metaAtt.file_key, metaAtt.nonce)
+              .then(async (path) => {
+                setDecryptedPaths((prev) => new Map(prev).set(att.upload_id, path));
+                await upsertMediaTransfer({
+                  upload_id: att.upload_id,
+                  chat_id: chatId,
+                  file_name: att.upload_id,
+                  mime_type: att.mime_type,
+                  file_size: att.total_size,
+                  status: "completed",
+                  total_chunks: att.total_chunks,
+                  chunks_completed: att.total_chunks,
+                  progress: 1,
+                  decrypted_path: path,
+                });
+                if (getMediaType(att.mime_type) === "video") {
+                  const thumb = await mediaManager.generateVideoThumbnail(path).catch(() => null);
+                  if (thumb) setThumbnailPaths((prev) => new Map(prev).set(att.upload_id, thumb));
+                }
+              })
+              .catch((err) => console.warn("[AutoDownload]", att.upload_id, err));
+            continue;
+          }
+        }
+
+        // Standard pipeline: use epoch key + attachment.nonce
+        getEpochKeyForChat(msg.epoch_id, chatId)
+          .then((epochKey) => {
+            if (!epochKey) return;
+            return mediaManager.downloadAndDecrypt(att, epochKey, att.nonce);
+          })
+          .then(async (path) => {
+            if (path) {
+              setDecryptedPaths((prev) => new Map(prev).set(att.upload_id, path));
+              await upsertMediaTransfer({
+                upload_id: att.upload_id,
+                chat_id: chatId,
+                file_name: att.upload_id,
+                mime_type: att.mime_type,
+                file_size: att.total_size,
+                status: "completed",
+                total_chunks: att.total_chunks,
+                chunks_completed: att.total_chunks,
+                progress: 1,
+                decrypted_path: path,
+              });
+              if (getMediaType(att.mime_type) === "video") {
+                const thumb = await mediaManager.generateVideoThumbnail(path).catch(() => null);
+                if (thumb) setThumbnailPaths((prev) => new Map(prev).set(att.upload_id, thumb));
+              }
+            }
+          })
+          .catch((err) => console.warn("[AutoDownload]", att.upload_id, err));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderedMessages]);
 
 
 
@@ -244,9 +538,17 @@ export function ChatScreen() {
           withUser,
           length: text.length,
           replyId: replyTo?.id,
+          attachmentCount: pendingAttachments.length,
         });
-        await sendMessage(text, replyTo?.id ?? null);
+
+        // Pass un-uploaded attachments to sendMessage — uploads happen there with the epoch key
+        const attachmentsToSend = pendingAttachments.length > 0
+          ? [...pendingAttachments]
+          : undefined;
+
+        await sendMessage(text, replyTo?.id ?? null, attachmentsToSend);
         setReplyTo(null);
+        setPendingAttachments([]);
         console.log("[ChatScreen] send success", { chatId, withUser });
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
@@ -260,7 +562,7 @@ export function ChatScreen() {
         Alert.alert("Error", error.message || "Failed to send message");
       }
     },
-    [sendMessage, replyTo, chatId, withUser],
+    [sendMessage, replyTo, chatId, withUser, pendingAttachments],
   );
 
   // Determine sender name for a reply target
@@ -273,7 +575,7 @@ export function ChatScreen() {
       const senderName =
         replyMsg.sender_id === auth.userId ? "You" : withUser;
       return {
-        replyText: replyMsg.plaintext || "[Encrypted]",
+        replyText: getDisplayText(replyMsg),
         replySender: senderName,
       };
     },
@@ -298,10 +600,14 @@ export function ChatScreen() {
               : undefined
           }
           onSwipeReply={handleSwipeReply}
+          decryptedPaths={decryptedPaths}
+          thumbnailPaths={thumbnailPaths}
+          onDownloadAttachment={handleDownloadAttachment}
+          onSaveAttachment={handleSaveAttachment}
         />
       );
     },
-    [auth.userId, getReplyInfo, handleScrollToMessage, handleSwipeReply],
+    [auth.userId, getReplyInfo, handleScrollToMessage, handleSwipeReply, decryptedPaths, thumbnailPaths, handleDownloadAttachment, handleSaveAttachment],
   );
 
   const renderEmpty = () => (
@@ -375,12 +681,17 @@ export function ChatScreen() {
         >
           {replyTo ? (
             <ReplyPreview
-              replyText={replyTo.plaintext || "[Encrypted]"}
+              replyText={getDisplayText(replyTo)}
               replySender={replyToSender ?? undefined}
               onDismiss={handleCancelReply}
               isInputBar
             />
           ) : null}
+
+          <AttachmentUploadProgress
+            attachments={pendingAttachments}
+            onRemove={handleRemoveAttachment}
+          />
 
           <MessageInput
             onSend={handleSend}
@@ -389,6 +700,8 @@ export function ChatScreen() {
             onDisabledPress={() =>
               setToastMessage("Not connected to server. Please check the URL in settings.")
             }
+            onAttachPress={auth.isAuthenticated ? handleAttachPress : undefined}
+            hasAttachments={pendingAttachments.some((pa) => pa.status === "uploaded" || pa.status === "queued")}
           />
         </View>
         </View>

@@ -458,30 +458,49 @@ window.
 
 **Connection URL**
 ```
-ws://<host>:8000/chat/ws/{chat_id}?token=<session_token>&device_id=<uuid-v4>
+ws://<host>:8000/chat/ws/{chat_id}
 ```
 
 **Path parameters**
 - `chat_id` — integer
 
-**Query parameters** (used for authentication)
+**Authentication** is performed via the **first WebSocket message** after the
+connection is opened. Credentials are never sent in the URL, avoiding leakage
+through server logs, proxy logs, browser history, and referrer headers.
+
+The client must send an `auth` frame as the very first message within 10
+seconds of connecting:
+
+```json
+{
+  "type": "auth",
+  "token": "<session_token>",
+  "device_id": "<uuid-v4>"
+}
 ```
-token: string (required)   # the session token from POST /auth/login
-device_id: string (required)  # UUID v4 device identifier
-```
+
+- `token` — the session token returned by `POST /auth/login`.
+- `device_id` — the client-generated UUID v4 device identifier.
+
+If the first frame is not a valid `auth` message, or if the credentials are
+invalid, the server closes the connection with code `4001` ("Unauthorized").
+If the timeout elapses with no message the connection is also closed with
+`4001`.
 
 **Connection lifecycle**
 
-1. The server authenticates the token + device_id pair.
+1. The client opens a plain WebSocket connection (no query-param credentials).
+2. The client sends an `auth` frame (see above) within 10 seconds.
+3. The server validates the `(token, device_id)` pair.
    - On failure the connection is closed with code `4001` ("Unauthorized").
    - If the user is not a member of the chat, closed with `4004` ("Chat not found").
-2. Immediately after connecting, the server sends a `history` frame containing
-   the last 50 messages (same shape as the old REST response).
-3. Whenever a new message is sent via `POST /chat/{chat_id}/message`, the
+4. Immediately after authentication, the server sends a `history` frame
+   containing the last 50 messages (same shape as the old REST response).
+5. Whenever a new message is sent via `POST /chat/{chat_id}/message`, the
    server pushes a `new_message` frame to every connected member.
-4. The client may send `{"type":"ping"}` at any time; the server replies with
+6. The client may send `{"type":"ping"}` at any time; the server replies with
    `{"type":"pong"}`.
-5. Either side may close the connection normally.
+7. Either side may close the connection normally.
 
 **Server → Client frames**
 
@@ -545,6 +564,15 @@ device_id: string (required)  # UUID v4 device identifier
 ```
 
 **Client → Server frames**
+
+*auth* (must be the first frame; see Authentication above)
+```json
+{
+  "type": "auth",
+  "token": "<session_token>",
+  "device_id": "<uuid-v4>"
+}
+```
 
 *ping*
 ```json

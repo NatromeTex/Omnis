@@ -67,15 +67,19 @@ class ChatWebSocket {
 
       console.log("[WS] Connecting to", path);
 
-      // Pass auth via Sec-WebSocket-Protocol subprotocols
-      const ws = new WebSocket(url, [
-        `omnis-token.${token}`,
-        `omnis-device.${deviceId}`,
-        "omnis-v1",
-      ]);
+      // Open a plain WebSocket — no credentials in URL or subprotocols
+      const ws = new WebSocket(url);
 
       ws.onopen = () => {
-        console.log("[WS] Connected", { chatId: this.chatId });
+        console.log("[WS] Connected, sending auth frame", { chatId: this.chatId });
+        // Authenticate via the first message (within 10 s server deadline)
+        ws.send(
+          JSON.stringify({
+            type: "auth",
+            token,
+            device_id: deviceId,
+          }),
+        );
         this.reconnectAttempt = 0;
         this.onStatus?.("connected");
         this._startPing();
@@ -101,8 +105,13 @@ class ChatWebSocket {
         this.ws = null;
         this.onStatus?.("disconnected");
 
-        // 4001 = auth rejected by server; do not retry
-        if (!this.intentionallyClosed && event.code !== 4001) {
+        // 4001 = auth rejected; 4004 = chat not found; 403 = HTTP handshake failure
+        // None of these are recoverable — do not retry.
+        const isUnrecoverable =
+          event.code === 4001 ||
+          event.code === 4004 ||
+          (event.reason && event.reason.includes("403"));
+        if (!this.intentionallyClosed && !isUnrecoverable) {
           this._scheduleReconnect();
         }
       };

@@ -15,19 +15,29 @@ export {
     getLatestEpoch,
     getLatestMessageId,
     getMessage,
+    getMessageWithAttachments,
     getMessages,
+    getMediaTransfer,
+    getMediaTransfersForChat,
     getUnsyncedMessages,
     initDatabase,
     insertMessage,
+    insertMessageWithAttachments,
     markMessageSynced,
     searchChats,
     storeUnwrappedEpochKey,
     updateChatLastMessage,
+    updateMediaTransferDecryptedPath,
+    updateMediaTransferStatus,
     updateMessagePlaintext,
     updateUnreadCount,
     upsertChat,
-    upsertEpoch
+    upsertEpoch,
+    upsertMediaTransfer,
 } from "./database";
 export * from "./storage";
 export { chatSocket } from "./websocket";
-
+export { mediaManager } from "./mediaManager";
+export * from "./mediaApi";
+export { default as NativeMediaWorkerModule } from "./NativeMediaWorkerModule";
+export * from "./mediaNotifications";

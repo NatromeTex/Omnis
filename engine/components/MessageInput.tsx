@@ -30,6 +30,10 @@ interface MessageInputProps {
   disableInput?: boolean;
   /** Called when the user taps the input while it is disabled */
   onDisabledPress?: () => void;
+  /** Called when the user taps the attachment button */
+  onAttachPress?: () => void;
+  /** Whether there are pending attachments ready to send */
+  hasAttachments?: boolean;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -44,6 +48,8 @@ export function MessageInput({
   disableSend,
   disableInput,
   onDisabledPress,
+  onAttachPress,
+  hasAttachments = false,
 }: MessageInputProps) {
   const inputRef = useRef<TextInput>(null);
   const [message, setMessage] = useState("");
@@ -93,10 +99,24 @@ export function MessageInput({
     [],
   );
 
-  const canSend = message.trim().length > 0 && !isSendDisabled;
+  const canSend = (message.trim().length > 0 || hasAttachments) && !isSendDisabled;
 
   return (
     <View style={styles.container}>
+      {onAttachPress && (
+        <Pressable
+          style={styles.attachButton}
+          onPress={onAttachPress}
+          disabled={isInputDisabled}
+          hitSlop={8}
+        >
+          <Ionicons
+            name="attach"
+            size={24}
+            color={isInputDisabled ? Colors.textMuted : Colors.accent}
+          />
+        </Pressable>
+      )}
       <View style={styles.inputWrapper}>
         <TextInput
           ref={inputRef}
@@ -149,6 +169,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 8,
+  },
+  attachButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   inputWrapper: {
     flex: 1,

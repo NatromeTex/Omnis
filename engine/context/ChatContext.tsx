@@ -27,6 +27,7 @@ import {
     unwrapEpochKey,
     wrapEpochKey,
 } from "../services/crypto";
+import { mediaManager } from "../services/mediaManager";
 import {
     clearUnreadCount,
     searchChats as dbSearchChats,
@@ -45,7 +46,7 @@ import {
     upsertEpoch,
 } from "../services/database";
 import { chatSocket } from "../services/websocket";
-import type { LocalChat, LocalMessage, Message, WsServerFrame } from "../types";
+import type { LocalChat, LocalMessage, Message, PendingAttachment, WsServerFrame } from "../types";
 import { useApp } from "./AppContext";
 
 // State types
@@ -131,8 +132,9 @@ interface ChatContextValue extends ChatState {
   openChat: (chatId: number) => Promise<void>;
   closeChat: () => void;
   loadMessages: (chatId: number, beforeId?: number) => Promise<void>;
-  sendMessage: (text: string, replyId?: number | null) => Promise<void>;
+  sendMessage: (text: string, replyId?: number | null, pendingAttachments?: PendingAttachment[]) => Promise<void>;
   syncChats: () => Promise<void>;
+  getEpochKeyForChat: (epochId: number, chatId: number) => Promise<string | null>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -185,14 +187,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     dispatch({ type: "SET_LOADING_CHATS", payload: true });
     try {
-      const serverChats = await listChats();
+      // Try to fetch from server; if it fails (e.g. 401), fall through
+      // and still load whatever is in the local database.
+      try {
+        const serverChats = await listChats();
 
-      for (const chat of serverChats) {
-        await upsertChat({
-          chat_id: chat.chat_id,
-          with_user: chat.with_user,
-          unread_count: 0,
-        });
+        for (const chat of serverChats) {
+          await upsertChat({
+            chat_id: chat.chat_id,
+            with_user: chat.with_user,
+            unread_count: 0,
+          });
+        }
+      } catch (apiError) {
+        console.warn("Failed to fetch chats from server, loading local data:", apiError);
       }
 
       const chats = await getChats();
@@ -308,6 +316,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         plaintext,
         created_at: msg.created_at,
         synced: true,
+        attachments: msg.attachments,
+        mediaMeta: plaintext ? mediaManager.parseMediaMeta(plaintext) ?? undefined : undefined,
       };
 
       await insertMessage(localMsg);
@@ -376,7 +386,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         // Reload from DB
         const messages = await getMessages(chatId, 50);
-        const ordered = messages
+        const enriched = messages.map(msg => ({
+          ...msg,
+          mediaMeta: msg.plaintext ? mediaManager.parseMediaMeta(msg.plaintext) ?? undefined : undefined,
+        }));
+        const ordered = enriched
           .slice()
           .sort(
             (a, b) =>
@@ -389,16 +403,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "ADD_MESSAGE", payload: localMsg });
 
         // Update chat list
+        const displayText = localMsg.plaintext
+          ? mediaManager.getDisplayText(localMsg.plaintext)
+          : "[Encrypted]";
         await updateChatLastMessage(
           chatId,
-          localMsg.plaintext || "[Encrypted]",
+          displayText,
           localMsg.created_at,
         );
         dispatch({
           type: "UPDATE_CHAT",
           payload: {
             chat_id: chatId,
-            last_message: localMsg.plaintext || "[Encrypted]",
+            last_message: displayText,
             last_message_time: localMsg.created_at,
           },
         });
@@ -560,7 +577,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         // Load from local database
         const messages = await getMessages(chatId, 50, beforeId);
-        const orderedMessages = messages
+        const enriched = messages.map(msg => ({
+          ...msg,
+          mediaMeta: msg.plaintext ? mediaManager.parseMediaMeta(msg.plaintext) ?? undefined : undefined,
+        }));
+        const orderedMessages = enriched
           .slice()
           .sort(
             (a, b) =>
@@ -577,9 +598,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [auth.isAuthenticated, getEpochKey],
   );
 
-  // Send a message (with optional reply)
+  // Send a message (with optional reply and attachments)
   const sendMessage = useCallback(
-    async (text: string, replyId?: number | null) => {
+    async (text: string, replyId?: number | null, pendingAttachments?: PendingAttachment[]) => {
       if (!state.currentChatId) {
         throw new Error("No chat selected");
       }
@@ -649,8 +670,40 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           throw new Error("Cannot decrypt epoch key");
         }
 
+        // Upload attachments with the epoch key (matching the website pipeline)
+        const hasAttachments = pendingAttachments && pendingAttachments.length > 0;
+        let allMediaIds: number[] = [];
+
+        if (hasAttachments) {
+          for (const pa of pendingAttachments) {
+            if (pa.mediaIds.length > 0) {
+              // Already uploaded (shouldn't happen in new flow, but handle gracefully)
+              allMediaIds.push(...pa.mediaIds);
+              continue;
+            }
+            const nonceBase64 = pa._nonceBase64;
+            if (!nonceBase64) {
+              throw new Error("Missing encryption nonce for attachment");
+            }
+            const mediaIds = await mediaManager.uploadAttachment(
+              pa,
+              chatId,
+              epochKeyBase64,
+              nonceBase64,
+            );
+            pa.mediaIds = mediaIds;
+            allMediaIds.push(...mediaIds);
+          }
+        }
+
+        // Encrypt plain text directly (website-compatible pipeline — no mediaMeta JSON)
+        const messageBody = text || (hasAttachments ? "\u{1F4CE}" : "");
+        const displayText = hasAttachments && !text
+          ? (pendingAttachments!.length === 1 ? "\u{1F4CE} Attachment" : `\u{1F4CE} ${pendingAttachments!.length} Attachments`)
+          : messageBody;
+
         // Encrypt message
-        const encrypted = await aesGcmEncrypt(text, epochKeyBase64);
+        const encrypted = await aesGcmEncrypt(messageBody, epochKeyBase64);
 
         // Send to server (the server will broadcast via WS)
         const response = await apiSendMessage(chatId, {
@@ -658,6 +711,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ciphertext: encrypted.ciphertext,
           nonce: encrypted.nonce,
           reply_id: replyId ?? undefined,
+          media_ids: allMediaIds.length > 0 ? allMediaIds : undefined,
         });
 
         // Store locally immediately (WS broadcast will deduplicate)
@@ -669,21 +723,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           reply_id: replyId ?? null,
           ciphertext: encrypted.ciphertext,
           nonce: encrypted.nonce,
-          plaintext: text,
+          plaintext: messageBody,
           created_at: response.created_at,
           synced: true,
+          attachments: response.attachments,
         };
 
         await insertMessage(localMessage);
         dispatch({ type: "ADD_MESSAGE", payload: localMessage });
 
         // Update chat last message
-        await updateChatLastMessage(chatId, text, response.created_at);
+        await updateChatLastMessage(chatId, displayText, response.created_at);
         dispatch({
           type: "UPDATE_CHAT",
           payload: {
             chat_id: chatId,
-            last_message: text,
+            last_message: displayText,
             last_message_time: response.created_at,
           },
         });
@@ -730,6 +785,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     loadMessages,
     sendMessage,
     syncChats,
+    getEpochKeyForChat: getEpochKey,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

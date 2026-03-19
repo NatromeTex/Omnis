@@ -10,7 +10,7 @@
  */
 
 import { fromByteArray, toByteArray } from "base64-js";
-import { v4 as uuidv4 } from "uuid";
+import * as Crypto from "expo-crypto";
 import NativeCryptoModule from "./NativeCryptoModule";
 
 // ==================== ENCODING UTILITIES (lightweight — kept in JS) ====================
@@ -51,7 +51,7 @@ export function hexToBytes(hex: string): Uint8Array {
  * Generate a random UUID v4 (synchronous, stays in JS)
  */
 export function generateUUID(): string {
-  return uuidv4();
+  return Crypto.randomUUID();
 }
 
 /**
