@@ -4,7 +4,7 @@
  * All media is encrypted client-side before upload.
  */
 
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import { APP_VERSION, ENDPOINTS } from "../constants";
 import type { MediaMetaResponse, MediaUploadResponse } from "../types";
 import { getApiBaseUrl, getAuthToken, getDeviceId } from "./storage";
@@ -137,31 +137,28 @@ export async function downloadMediaChunkToFile(
 
   console.log(`[MediaAPI] Downloading chunk mediaId=${mediaId} url=${url} dest=${fileUri}`);
 
-  let result: FileSystem.FileSystemDownloadResult;
+  const destination = new File(fileUri);
   try {
-    result = await FileSystem.downloadAsync(url, fileUri, {
+    await File.downloadFileAsync(url, destination, {
       headers: {
         Authorization: `Bearer ${token}`,
         "X-Device-ID": deviceId,
         "User-Agent": `Omnis/${APP_VERSION} (Android ${Platform.Version})`,
       },
+      idempotent: true,
     });
   } catch (err: any) {
-    console.error(`[MediaAPI] downloadAsync threw for mediaId=${mediaId} url=${url}:`, err?.message ?? err);
-    throw err;
-  }
-
-  console.log(`[MediaAPI] Chunk mediaId=${mediaId} response status=${result.status} headers=${JSON.stringify(result.headers ?? {})}`);
-
-  if (result.status !== 200) {
-    console.error(
-      `[MediaAPI] Download failed: mediaId=${mediaId} status=${result.status} url=${url} headers=${JSON.stringify(result.headers ?? {})}`,
-    );
+    const message = err?.message ?? String(err);
+    const statusMatch = /status\s+code\s+(\d{3})/i.exec(message);
+    const status = statusMatch ? Number(statusMatch[1]) : 0;
+    console.error(`[MediaAPI] downloadFileAsync threw for mediaId=${mediaId} url=${url}:`, message);
     throw new MediaApiError(
-      `Download failed with status ${result.status}`,
-      result.status,
+      status > 0 ? `Download failed with status ${status}` : message,
+      status,
     );
   }
+
+  console.log(`[MediaAPI] Chunk downloaded mediaId=${mediaId} uri=${destination.uri}`);
 }
 
 export { MediaApiError };

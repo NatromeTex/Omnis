@@ -11,7 +11,19 @@ type WsMessageHandler = (frame: WsServerFrame) => void;
 type WsStatusHandler = (status: "connected" | "disconnected" | "error") => void;
 
 const PING_INTERVAL_MS = 25_000;
-const RECONNECT_DELAYS = [1_000, 2_000, 4_000, 8_000, 15_000];
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_JITTER_RATIO = 0.2;
+
+function computeReconnectDelayMs(attempt: number): number {
+  const expDelay = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt)),
+  );
+  const jitter = expDelay * RECONNECT_JITTER_RATIO;
+  const randomized = expDelay + (Math.random() * 2 - 1) * jitter;
+  return Math.max(0, Math.round(randomized));
+}
 
 class ChatWebSocket {
   private ws: WebSocket | null = null;
@@ -151,10 +163,7 @@ class ChatWebSocket {
   private _scheduleReconnect() {
     if (this.reconnectTimer) return;
 
-    const delay =
-      RECONNECT_DELAYS[
-        Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)
-      ];
+    const delay = computeReconnectDelayMs(this.reconnectAttempt);
     console.log(
       `[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt + 1})`,
     );

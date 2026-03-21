@@ -133,7 +133,11 @@ export function ProfileScreen() {
         text: "Log Out",
         style: "destructive",
         onPress: async () => {
-          await logout();
+          try {
+            await logout();
+          } catch (error: any) {
+            Alert.alert("Logout failed", error?.message || "Please try again.");
+          }
         },
       },
     ]);

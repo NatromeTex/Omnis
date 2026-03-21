@@ -13,7 +13,6 @@ import {
 import type {
   MediaTransferProgress,
   MediaTransferStatus,
-  MediaUploadResponse,
   MessageAttachment,
   MessageMediaMeta,
   PendingAttachment,
@@ -27,6 +26,7 @@ import {
 } from "./mediaNotifications";
 import NativeMediaModule from "./NativeMediaModule";
 import { generateUUID } from "./crypto";
+import { isTransientNetworkError, retryWithBackoff } from "./retry";
 
 // ========================= Types =========================
 
@@ -200,13 +200,9 @@ class MediaManager {
           throw new Error("Upload cancelled");
         }
 
-        let response: MediaUploadResponse | null = null;
-        let attempt = 0;
-
-        // Retry with exponential backoff
-        while (attempt < MEDIA_UPLOAD_RETRY_MAX) {
-          try {
-            response = await uploadMediaChunk(
+        const response = await retryWithBackoff(
+          () =>
+            uploadMediaChunk(
               chunkPaths[i],
               chatId,
               pending.mimeType,
@@ -214,22 +210,21 @@ class MediaManager {
               i,
               totalChunks,
               uploadId,
-            );
-            break;
-          } catch (error: any) {
-            attempt++;
-            if (attempt >= MEDIA_UPLOAD_RETRY_MAX) {
-              throw error;
-            }
-            // Exponential backoff
-            const delay = MEDIA_UPLOAD_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-            await new Promise((r) => setTimeout(r, delay));
-          }
-        }
-
-        if (!response) {
-          throw new Error(`Failed to upload chunk ${i}`);
-        }
+            ),
+          {
+            maxAttempts: MEDIA_UPLOAD_RETRY_MAX,
+            baseDelayMs: MEDIA_UPLOAD_RETRY_BASE_MS,
+            maxDelayMs: 20_000,
+            shouldRetry: (error) => isTransientNetworkError(error),
+            onRetry: (error, attempt, nextDelayMs) => {
+              console.warn(
+                `[MediaManager] chunk upload retry uploadId=${uploadId} chunk=${i + 1}/${totalChunks} attempt=${attempt} nextDelayMs=${nextDelayMs}`,
+                error,
+              );
+              this.notifyProgress(uploadId, "retrying", pending.progress, i, totalChunks);
+            },
+          },
+        );
 
         task.mediaIds.push(response.media_id);
         task.chunksUploaded = i + 1;
@@ -336,7 +331,22 @@ class MediaManager {
         const chunkPath = `${downloadDir}/chunk_${chunk.chunk_index}`;
         console.log(`[MediaManager] Downloading chunk ${i + 1}/${totalChunks} mediaId=${chunk.media_id} chunkIndex=${chunk.chunk_index}`);
         try {
-          await downloadMediaChunkToFile(chunk.media_id, chunkPath);
+          await retryWithBackoff(
+            () => downloadMediaChunkToFile(chunk.media_id, chunkPath),
+            {
+              maxAttempts: MEDIA_UPLOAD_RETRY_MAX,
+              baseDelayMs: MEDIA_UPLOAD_RETRY_BASE_MS,
+              maxDelayMs: 20_000,
+              shouldRetry: (error) => isTransientNetworkError(error),
+              onRetry: (error, attempt, nextDelayMs) => {
+                console.warn(
+                  `[MediaManager] chunk download retry uploadId=${uploadId} chunk=${i + 1}/${totalChunks} mediaId=${chunk.media_id} attempt=${attempt} nextDelayMs=${nextDelayMs}`,
+                  error,
+                );
+                this.notifyProgress(uploadId, "retrying", task.progress, i, totalChunks);
+              },
+            },
+          );
         } catch (chunkErr: any) {
           console.error(
             `[MediaManager] Chunk download failed uploadId=${uploadId} chunk=${i + 1}/${totalChunks} mediaId=${chunk.media_id}:`,

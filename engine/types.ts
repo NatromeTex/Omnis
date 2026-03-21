@@ -79,6 +79,7 @@ export function getMediaType(mimeType: string): MediaType {
 export type MediaTransferStatus =
   | "queued"
   | "encrypting"
+  | "retrying"
   | "uploading"
   | "uploaded"
   | "downloading"

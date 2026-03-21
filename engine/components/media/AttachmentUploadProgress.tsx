@@ -107,6 +107,7 @@ function getStatusColor(status: string): string {
   switch (status) {
     case "queued": return Colors.textMuted;
     case "encrypting": return "#FFB300";
+    case "retrying": return "#FF9800";
     case "uploading": return Colors.accent;
     case "uploaded": return "#4CAF50";
     case "failed": return "#F44336";
@@ -118,6 +119,7 @@ function getStatusLabel(status: string): string {
   switch (status) {
     case "queued": return "Queued";
     case "encrypting": return "Encrypting…";
+    case "retrying": return "Retrying…";
     case "uploading": return "Uploading…";
     case "uploaded": return "Ready";
     case "failed": return "Failed";

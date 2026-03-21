@@ -1,18 +1,14 @@
 /**
  * VideoComponent
- * Renders video attachments with a thumbnail preview and play overlay.
- * Tapping opens the video in the system player.
+ * Renders video attachments and plays them inline in-app.
  */
 
 import { Ionicons } from "@expo/vector-icons";
-import * as FileSystem from "expo-file-system";
+import { useVideoPlayer, VideoView } from "expo-video";
 import React from "react";
 import {
   ActivityIndicator,
   Image,
-  Linking,
-  Platform,
-  Pressable,
   StyleSheet,
   Text,
   View,
@@ -34,32 +30,32 @@ export function VideoComponent({
   width = 240,
   height = 160,
 }: VideoComponentProps) {
-  const handlePress = async () => {
-    if (uri) {
-      try {
-        if (Platform.OS === "android") {
-          // file:// URIs are blocked by Android's FileProvider.
-          // Convert to a content:// URI that the system can open.
-          const fileUri = uri.startsWith("file://") ? uri : `file://${uri}`;
-          const contentUri = await FileSystem.getContentUriAsync(fileUri);
-          await Linking.openURL(contentUri);
-        } else {
-          await Linking.openURL(`file://${uri}`);
-        }
-      } catch {
-        console.warn("[VideoComponent] Could not open video file");
-      }
-    }
-  };
+  const resolvedVideoUri = uri
+    ? (uri.startsWith("file://") ? uri : `file://${uri}`)
+    : null;
+
+  const resolvedThumbnailUri = thumbnailUri
+    ? (thumbnailUri.startsWith("file://") ? thumbnailUri : `file://${thumbnailUri}`)
+    : null;
+
+  const player = useVideoPlayer(resolvedVideoUri, (instance) => {
+    instance.loop = false;
+  });
 
   return (
-    <Pressable
-      onPress={handlePress}
-      style={[styles.container, { width, height }]}
-    >
-      {thumbnailUri ? (
+    <View style={[styles.container, { width, height }]}> 
+      {resolvedVideoUri ? (
+        <VideoView
+          player={player}
+          style={[styles.video, { width, height }]}
+          contentFit="cover"
+          nativeControls
+          allowsFullscreen
+          allowsPictureInPicture
+        />
+      ) : thumbnailUri ? (
         <Image
-          source={{ uri: `file://${thumbnailUri}` }}
+          source={{ uri: resolvedThumbnailUri ?? undefined }}
           style={[styles.thumbnail, { width, height }]}
           resizeMode="cover"
         />
@@ -72,10 +68,10 @@ export function VideoComponent({
           )}
         </View>
       )}
-      {uri && (
+      {!resolvedVideoUri && uri && (
         <View style={styles.playOverlay}>
           <View style={styles.playButton}>
-            <Ionicons name="play" size={28} color={Colors.textPrimary} />
+            <Ionicons name="play" size={24} color={Colors.textPrimary} />
           </View>
         </View>
       )}
@@ -86,7 +82,7 @@ export function VideoComponent({
           </Text>
         </View>
       )}
-    </Pressable>
+    </View>
   );
 }
 
@@ -98,6 +94,9 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   thumbnail: {
+    borderRadius: 12,
+  },
+  video: {
     borderRadius: 12,
   },
   placeholder: {

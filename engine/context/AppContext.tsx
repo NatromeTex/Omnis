@@ -305,8 +305,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     try {
       await apiLogout();
-    } catch {
-      // Ignore errors during logout
+    } catch (error: any) {
+      const message = error?.message || "Failed to log out from server. Please try again.";
+      throw new Error(message);
     }
 
     // Clear all sensitive data
@@ -325,6 +326,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Set API base URL
   const setApiBaseUrl = useCallback(async (url: string) => {
     const previousUrl = await getApiBaseUrl();
+
+    if (previousUrl !== url && state.auth.isAuthenticated) {
+      await logout();
+    }
+
     await saveApiBaseUrl(url);
     const updatedHistory = await addUrlToHistory(url);
     dispatch({ type: "SET_SETTINGS", payload: { apiBaseUrl: url } });
@@ -333,7 +339,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (previousUrl !== url) {
       await clearAllData();
     }
-  }, []);
+  }, [logout, state.auth.isAuthenticated]);
 
   // Refresh URL history from storage
   const refreshUrlHistory = useCallback(async () => {

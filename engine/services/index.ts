@@ -38,6 +38,9 @@ export {
 export * from "./storage";
 export { chatSocket } from "./websocket";
 export { mediaManager } from "./mediaManager";
+export { OmnisCryptoTurboModule } from "./OmnisCryptoTurboModule";
+export { OmnisMediaTurboModule } from "./OmnisMediaTurboModule";
 export * from "./mediaApi";
 export { default as NativeMediaWorkerModule } from "./NativeMediaWorkerModule";
 export * from "./mediaNotifications";
+export * from "./retry";

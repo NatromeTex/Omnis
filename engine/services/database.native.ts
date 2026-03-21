@@ -410,6 +410,7 @@ export async function clearChatData(chatId: number): Promise<void> {
   const database = await ensureDb();
   await database.runAsync(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
   await database.runAsync(`DELETE FROM epochs WHERE chat_id = ?`, [chatId]);
+  await database.runAsync(`DELETE FROM media_transfers WHERE chat_id = ?`, [chatId]);
   await database.runAsync(`DELETE FROM chats WHERE chat_id = ?`, [chatId]);
 }
 
@@ -420,6 +421,7 @@ export async function clearAllData(): Promise<void> {
   const database = await ensureDb();
   await database.runAsync(`DELETE FROM messages`);
   await database.runAsync(`DELETE FROM epochs`);
+  await database.runAsync(`DELETE FROM media_transfers`);
   await database.runAsync(`DELETE FROM chats`);
 }
 

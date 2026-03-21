@@ -12,6 +12,10 @@ import React, {
     useRef,
 } from "react";
 import {
+  MESSAGE_SEND_RETRY_BASE_MS,
+  MESSAGE_SEND_RETRY_MAX,
+} from "../constants";
+import {
     createChat as apiCreateChat,
     createEpoch as apiCreateEpoch,
     fetchChat as apiFetchChat,
@@ -46,6 +50,7 @@ import {
     upsertEpoch,
 } from "../services/database";
 import { chatSocket } from "../services/websocket";
+import { isTransientNetworkError, retryWithBackoff } from "../services/retry";
 import type { LocalChat, LocalMessage, Message, PendingAttachment, WsServerFrame } from "../types";
 import { useApp } from "./AppContext";
 
@@ -604,6 +609,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (!state.currentChatId) {
         throw new Error("No chat selected");
       }
+      if (!state.wsConnected) {
+        throw new Error("Not connected to server. Please wait for reconnection.");
+      }
       if (!identityPrivateKey || !identityPublicKey) {
         throw new Error("Encryption keys not available. Please log in again.");
       }
@@ -633,23 +641,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             peerKey.identity_pub,
           );
 
-          let epochResponse;
-          try {
-            epochResponse = await apiCreateEpoch(chatId, {
-              wrapped_key_a: wrappedKey,
-              wrapped_key_b: wrappedKey,
-            });
-          } catch (err: any) {
-            if (err?.status === 429 || err?.message?.includes("throttled")) {
-              await new Promise((r) => setTimeout(r, 5500));
-              epochResponse = await apiCreateEpoch(chatId, {
+          const epochResponse = await retryWithBackoff(
+            () =>
+              apiCreateEpoch(chatId, {
                 wrapped_key_a: wrappedKey,
                 wrapped_key_b: wrappedKey,
-              });
-            } else {
-              throw err;
-            }
-          }
+              }),
+            {
+              maxAttempts: MESSAGE_SEND_RETRY_MAX,
+              baseDelayMs: MESSAGE_SEND_RETRY_BASE_MS,
+              maxDelayMs: 15_000,
+              shouldRetry: (error) => isTransientNetworkError(error),
+              onRetry: (error, attempt, nextDelayMs) => {
+                console.warn(
+                  `[ChatContext] createEpoch retry chatId=${chatId} attempt=${attempt} nextDelayMs=${nextDelayMs}`,
+                  error,
+                );
+              },
+            },
+          );
 
           await upsertEpoch(
             epochResponse.epoch_id,
@@ -706,13 +716,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const encrypted = await aesGcmEncrypt(messageBody, epochKeyBase64);
 
         // Send to server (the server will broadcast via WS)
-        const response = await apiSendMessage(chatId, {
-          epoch_id: epochData.epoch_id,
-          ciphertext: encrypted.ciphertext,
-          nonce: encrypted.nonce,
-          reply_id: replyId ?? undefined,
-          media_ids: allMediaIds.length > 0 ? allMediaIds : undefined,
-        });
+        const response = await retryWithBackoff(
+          () =>
+            apiSendMessage(chatId, {
+              epoch_id: epochData.epoch_id,
+              ciphertext: encrypted.ciphertext,
+              nonce: encrypted.nonce,
+              reply_id: replyId ?? undefined,
+              media_ids: allMediaIds.length > 0 ? allMediaIds : undefined,
+            }),
+          {
+            maxAttempts: MESSAGE_SEND_RETRY_MAX,
+            baseDelayMs: MESSAGE_SEND_RETRY_BASE_MS,
+            maxDelayMs: 20_000,
+            shouldRetry: (error) => isTransientNetworkError(error),
+            onRetry: (error, attempt, nextDelayMs) => {
+              console.warn(
+                `[ChatContext] sendMessage retry chatId=${chatId} attempt=${attempt} nextDelayMs=${nextDelayMs}`,
+                error,
+              );
+            },
+          },
+        );
 
         // Store locally immediately (WS broadcast will deduplicate)
         const localMessage: LocalMessage = {
@@ -751,6 +776,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [
       state.currentChatId,
+      state.wsConnected,
       state.chats,
       identityPrivateKey,
       identityPublicKey,

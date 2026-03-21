@@ -2,121 +2,103 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as DocumentPicker from "expo-document-picker";
-import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
-  FlatList,
-  LayoutChangeEvent,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import {
+  Actions,
+  Bubble,
+  Composer,
+  GiftedChat,
+  InputToolbar,
+  type ActionsProps,
+  type BubbleProps,
+  type ComposerProps,
+  type InputToolbarProps,
+} from "react-native-gifted-chat";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, {
-    FadeIn,
-    runOnJS,
-    useAnimatedStyle,
-    useSharedValue,
-    withSpring,
-    withTiming,
-} from "react-native-reanimated";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Avatar, MessageBubble, MessageInput, ReplyPreview, Toast, AttachmentUploadProgress } from "../components";
+import { AttachmentUploadProgress, AttachmentRenderer, ReplyPreview, Toast } from "../components";
+import {
+  fromLocalMessage,
+  fromOptimisticMessage,
+  type OmnisGiftedMessage,
+  type OptimisticMessage,
+} from "../chat";
 import { useApp, useChat } from "../context";
 import { getCompletedMediaTransfers, upsertMediaTransfer } from "../services/database";
 import { mediaManager } from "../services/mediaManager";
 import { Colors } from "../theme";
-import type { LocalMessage, MessageAttachment, MediaTransferProgress, PendingAttachment, RootStackParamList } from "../types";
+import type {
+  MessageAttachment,
+  MediaTransferProgress,
+  PendingAttachment,
+  RootStackParamList,
+} from "../types";
 import { getMediaType } from "../types";
 
-/** Extract display text from a message, handling both plain text and media messages */
-function getDisplayText(msg: LocalMessage): string {
-  if (!msg.plaintext) return "[Encrypted]";
-  return mediaManager.getDisplayText(msg.plaintext);
+function isRetryable(message: OmnisGiftedMessage): boolean {
+  return message.omnisSource === "optimistic" && message.omnisOptimisticMessage?.state === "failed";
 }
 
-function SwipeableMessageRow({
-  item,
-  index,
-  isSent,
-  replyText,
-  replySender,
-  onReplyPress,
-  onSwipeReply,
-  decryptedPaths,
-  thumbnailPaths,
-  onDownloadAttachment,
-  onSaveAttachment,
+function getReplyPreviewText(text: string | undefined, attachmentCount: number): string {
+  const parsed = text ? mediaManager.getDisplayText(text).trim() : "";
+  if (parsed) return parsed;
+  if (attachmentCount === 1) return "Attachment";
+  if (attachmentCount > 1) return `${attachmentCount} Attachments`;
+  return "Message";
+}
+
+function SwipeReplyableBubble({
+  enabled,
+  onReply,
+  children,
 }: {
-  item: LocalMessage;
-  index: number;
-  isSent: boolean;
-  replyText?: string | null;
-  replySender?: string | null;
-  onReplyPress?: () => void;
-  onSwipeReply: (message: LocalMessage) => void;
-  decryptedPaths?: Map<string, string>;
-  thumbnailPaths?: Map<string, string>;
-  onDownloadAttachment?: (attachment: MessageAttachment) => void;
-  onSaveAttachment?: (uploadId: string, fileName: string, mimeType: string) => void;
+  enabled: boolean;
+  onReply: () => void;
+  children: ReactNode;
 }) {
   const translateX = useSharedValue(0);
-  const iconOpacity = useSharedValue(0);
 
-  const swipeGesture = Gesture.Pan()
-    .activeOffsetX(20)
-    .failOffsetY([-10, 10])
-    .onUpdate((event) => {
-      const tx = Math.max(0, Math.min(event.translationX, 80));
-      translateX.value = tx;
-      iconOpacity.value = tx > 30 ? 1 : tx / 30;
-    })
-    .onEnd((event) => {
-      if (event.translationX > 50) {
-        runOnJS(onSwipeReply)(item);
-        runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
-      }
-      translateX.value = withSpring(0, { damping: 20, stiffness: 300 });
-      iconOpacity.value = withTiming(0, { duration: 200 });
-    });
-
-  const rowStyle = useAnimatedStyle(() => ({
+  const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
   }));
 
-  const iconStyle = useAnimatedStyle(() => ({
-    opacity: iconOpacity.value,
-  }));
+  const gesture = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX([8, 10_000])
+    .failOffsetY([-12, 12])
+    .onUpdate((event) => {
+      const next = Math.max(0, Math.min(event.translationX, 88));
+      translateX.value = next;
+    })
+    .onEnd((event) => {
+      if (event.translationX >= 72) {
+        onReply();
+      }
+      translateX.value = withTiming(0, {
+        duration: 180,
+        easing: Easing.inOut(Easing.ease),
+      });
+    });
+
+  if (!enabled) {
+    return <>{children}</>;
+  }
 
   return (
-    <View style={styles.swipeableRow}>
-      <Animated.View style={[styles.replyIconContainer, iconStyle]}>
-        <Ionicons name="arrow-undo" size={20} color={Colors.accent} />
-      </Animated.View>
-      <GestureDetector gesture={swipeGesture}>
-        <Animated.View style={[styles.swipeableContent, rowStyle]}>
-          <MessageBubble
-            message={getDisplayText(item)}
-            timestamp={item.created_at}
-            isSent={isSent}
-            index={index}
-            replyText={replyText}
-            replySender={replySender}
-            onReplyPress={onReplyPress}
-            attachments={item.attachments}
-            mediaMeta={item.mediaMeta}
-            decryptedPaths={decryptedPaths}
-            thumbnailPaths={thumbnailPaths}
-            onDownloadAttachment={onDownloadAttachment}
-            onSaveAttachment={onSaveAttachment}
-          />
-        </Animated.View>
-      </GestureDetector>
-    </View>
+    <GestureDetector gesture={gesture}>
+      <Animated.View style={animatedStyle}>{children}</Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -125,32 +107,51 @@ export function ChatScreen() {
   const route = useRoute<NativeStackScreenProps<RootStackParamList, "Chat">["route"]>();
   const { chatId, withUser } = route.params;
 
-  const flatListRef = useRef<FlatList>(null);
-  const hasInitialScrollDoneRef = useRef(false);
-  const isNearBottomRef = useRef(true);
-  const previousMessageCountRef = useRef(0);
   const { auth } = useApp();
-  const { messages, isSending, openChat, closeChat, sendMessage, getEpochKeyForChat } = useChat();
+  const {
+    messages,
+    isLoadingMessages,
+    wsConnected,
+    openChat,
+    closeChat,
+    sendMessage,
+    loadMessages,
+    getEpochKeyForChat,
+  } = useChat();
 
-  // Reply state
-  const [replyTo, setReplyTo] = useState<LocalMessage | null>(null);
-
-  // Toast state
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Media attachment state
+  const [composerText, setComposerText] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
   const [decryptedPaths, setDecryptedPaths] = useState<Map<string, string>>(new Map());
   const [thumbnailPaths, setThumbnailPaths] = useState<Map<string, string>>(new Map());
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [replyTarget, setReplyTarget] = useState<{ id: number; text: string; sender: string } | null>(null);
+  const [toolbarLift, setToolbarLift] = useState(0);
+  const autoDownloadInFlightRef = useRef(new Set<string>());
+  const toolbarHostRef = useRef<View | null>(null);
+  const keyboardTopRef = useRef<number | null>(null);
 
-  // Composer (reply preview + input) height for bottom padding + overlap
-  const [composerHeight, setComposerHeight] = useState(72);
-  const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
-    const next = Math.ceil(event.nativeEvent.layout.height);
-    setComposerHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+  // On Android, adjustResize handles keyboard avoidance at the OS level.
+  // The toolbarLift mechanism is iOS-only to manually push the toolbar above
+  // the keyboard before layout updates (keyboardWillShow fires pre-layout).
+  const recalcToolbarLift = useCallback((keyboardTop: number | null) => {
+    if (Platform.OS === "android") {
+      setToolbarLift(0);
+      return;
+    }
+
+    if (keyboardTop == null || !toolbarHostRef.current) {
+      setToolbarLift(0);
+      return;
+    }
+
+    toolbarHostRef.current.measureInWindow((_x, y, _w, height) => {
+      const overlap = y + height - keyboardTop + 6;
+      const next = Math.max(0, Math.round(overlap));
+      setToolbarLift((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+    });
   }, []);
 
-  // Subscribe to media upload/download progress
   useEffect(() => {
     const unsub = mediaManager.subscribe((progress: MediaTransferProgress) => {
       setPendingAttachments((prev) =>
@@ -164,45 +165,82 @@ export function ChatScreen() {
     return unsub;
   }, []);
 
-  // Attachment picker handler
-  const handleAttachPress = useCallback(async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: "*/*",
-        multiple: true,
-        copyToCacheDirectory: true,
-      });
+  useEffect(() => {
+    openChat(chatId).catch((error) => {
+      console.error("[ChatScreen] open chat failed", error);
+      setToastMessage("Failed to open chat");
+    });
 
-      if (result.canceled || !result.assets || result.assets.length === 0) return;
-
-      const newPending: PendingAttachment[] = [];
-
-      for (const asset of result.assets) {
-        const { pending } = await mediaManager.prepareUpload(
-          asset.uri,
-          asset.name,
-          asset.mimeType || "application/octet-stream",
-          asset.size || 0,
-        );
-        newPending.push(pending);
+    const loadCachedMedia = async () => {
+      try {
+        const cached = await getCompletedMediaTransfers(chatId);
+        const validPaths = new Map<string, string>();
+        for (const [uploadId, path] of cached) {
+          const info = await mediaManager.getFileInfo(path);
+          if (info.exists) {
+            validPaths.set(uploadId, path);
+          }
+        }
+        if (validPaths.size > 0) {
+          setDecryptedPaths((prev) => {
+            const merged = new Map(prev);
+            for (const [key, value] of validPaths) {
+              merged.set(key, value);
+            }
+            return merged;
+          });
+        }
+      } catch (error) {
+        console.warn("[ChatScreen] failed loading cached media", error);
       }
+    };
 
-      setPendingAttachments((prev) => [...prev, ...newPending]);
-    } catch (error: any) {
-      console.error("[ChatScreen] attachment picker error:", error);
-      setToastMessage("Failed to pick file");
-    }
-  }, []);
+    loadCachedMedia().catch(() => {});
 
-  // Remove a pending attachment
-  const handleRemoveAttachment = useCallback((uploadId: string) => {
-    mediaManager.cancelUpload(uploadId);
-    setPendingAttachments((prev) => prev.filter((pa) => pa.uploadId !== uploadId));
-  }, []);
+    return () => {
+      closeChat();
+      setComposerText("");
+      setPendingAttachments([]);
+      setOptimisticMessages([]);
+      setReplyTarget(null);
+    };
+  }, [chatId, closeChat, openChat]);
 
-  // Build a lookup from upload_id → { epochId, legacyFileKey?, legacyNonce? }
-  // For old messages with mediaMeta: use file_key from mediaMeta (backward compat)
-  // For new/website messages: use epoch key + attachment.nonce
+  useEffect(() => {
+    // Android resizes the window automatically via adjustResize — no manual
+    // keyboard tracking needed. This listener block is iOS-only.
+    if (Platform.OS === "android") return;
+
+    const showSub = Keyboard.addListener("keyboardWillShow", (event) => {
+      const nextTop = event.endCoordinates?.screenY;
+      if (typeof nextTop === "number") {
+        keyboardTopRef.current = nextTop;
+        requestAnimationFrame(() => {
+          recalcToolbarLift(nextTop);
+        });
+      }
+    });
+
+    const hideSub = Keyboard.addListener("keyboardWillHide", () => {
+      keyboardTopRef.current = null;
+      setToolbarLift(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [recalcToolbarLift]);
+
+  useEffect(() => {
+    if (Platform.OS === "android") return;
+    if (keyboardTopRef.current == null) return;
+    const id = requestAnimationFrame(() => {
+      recalcToolbarLift(keyboardTopRef.current);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [composerText, pendingAttachments.length, replyTarget, recalcToolbarLift]);
+
   const attachmentEpochMap = useMemo(() => {
     const map = new Map<string, { epochId: number; legacyFileKey?: string; legacyNonce?: string }>();
     for (const msg of messages) {
@@ -211,7 +249,6 @@ export function ChatScreen() {
         const entry: { epochId: number; legacyFileKey?: string; legacyNonce?: string } = {
           epochId: msg.epoch_id,
         };
-        // Check if this message has old-style mediaMeta with per-file keys
         if (msg.mediaMeta?.attachments) {
           const metaAtt = msg.mediaMeta.attachments.find((a) => a.upload_id === att.upload_id);
           if (metaAtt?.file_key && metaAtt?.nonce) {
@@ -225,489 +262,509 @@ export function ChatScreen() {
     return map;
   }, [messages]);
 
-  // Download an attachment using the epoch key (website-compatible pipeline)
-  const handleDownloadAttachment = useCallback(async (attachment: MessageAttachment) => {
-    try {
-      const info = attachmentEpochMap.get(attachment.upload_id);
-      if (!info) {
-        setToastMessage("Cannot decrypt — key unavailable");
-        return;
-      }
-
-      let decryptedPath: string;
-
-      // Backward compat: if old mediaMeta has per-file key, use it
-      if (info.legacyFileKey) {
-        setToastMessage("Downloading\u2026");
-        decryptedPath = await mediaManager.downloadAndDecrypt(
-          attachment,
-          info.legacyFileKey,
-          info.legacyNonce,
-        );
-      } else {
-        // Standard pipeline: use epoch key + attachment.nonce (from server)
-        const epochKey = await getEpochKeyForChat(info.epochId, chatId);
-        if (!epochKey) {
-          setToastMessage("Cannot decrypt — epoch key unavailable");
+  const handleDownloadAttachment = useCallback(
+    async (attachment: MessageAttachment, options?: { silent?: boolean }) => {
+      try {
+        const info = attachmentEpochMap.get(attachment.upload_id);
+        if (!info) {
+          if (!options?.silent) setToastMessage("Cannot decrypt attachment");
           return;
         }
-        setToastMessage("Downloading\u2026");
-        decryptedPath = await mediaManager.downloadAndDecrypt(
-          attachment,
-          epochKey,
-          attachment.nonce,
-        );
-      }
 
-      setDecryptedPaths((prev) => new Map(prev).set(attachment.upload_id, decryptedPath));
-      // Persist decrypted path to DB for cache persistence
-      await upsertMediaTransfer({
-        upload_id: attachment.upload_id,
-        chat_id: chatId,
-        file_name: attachment.upload_id,
-        mime_type: attachment.mime_type,
-        file_size: attachment.total_size,
-        status: "completed",
-        total_chunks: attachment.total_chunks,
-        chunks_completed: attachment.total_chunks,
-        progress: 1,
-        decrypted_path: decryptedPath,
-      });
+        let decryptedPath: string;
+        if (info.legacyFileKey) {
+          decryptedPath = await mediaManager.downloadAndDecrypt(
+            attachment,
+            info.legacyFileKey,
+            info.legacyNonce,
+          );
+        } else {
+          const epochKey = await getEpochKeyForChat(info.epochId, chatId);
+          if (!epochKey) {
+            if (!options?.silent) setToastMessage("Epoch key unavailable");
+            return;
+          }
+          decryptedPath = await mediaManager.downloadAndDecrypt(
+            attachment,
+            epochKey,
+            attachment.nonce,
+          );
+        }
 
-      // Generate video thumbnail
-      if (getMediaType(attachment.mime_type) === "video") {
-        try {
+        setDecryptedPaths((prev) => new Map(prev).set(attachment.upload_id, decryptedPath));
+
+        await upsertMediaTransfer({
+          upload_id: attachment.upload_id,
+          chat_id: chatId,
+          file_name: attachment.upload_id,
+          mime_type: attachment.mime_type,
+          file_size: attachment.total_size,
+          status: "completed",
+          total_chunks: attachment.total_chunks,
+          chunks_completed: attachment.total_chunks,
+          progress: 1,
+          decrypted_path: decryptedPath,
+        });
+
+        if (getMediaType(attachment.mime_type) === "video") {
           const thumb = await mediaManager.generateVideoThumbnail(decryptedPath);
           if (thumb) {
             setThumbnailPaths((prev) => new Map(prev).set(attachment.upload_id, thumb));
           }
-        } catch { /* non-critical */ }
+        }
+
+        if (!options?.silent) setToastMessage("Attachment downloaded");
+      } catch (error) {
+        console.error("[ChatScreen] attachment download failed", error);
+        if (!options?.silent) setToastMessage("Download failed");
       }
-
-      setToastMessage("Downloaded");
-    } catch (error: any) {
-      console.error("[ChatScreen] download error:", error);
-      setToastMessage("Download failed");
-    }
-  }, [attachmentEpochMap, getEpochKeyForChat, chatId]);
-
-  // Save a decrypted attachment to public storage
-  const handleSaveAttachment = useCallback(async (uploadId: string, fileName: string, mimeType: string) => {
-    try {
-      const path = decryptedPaths.get(uploadId);
-      if (!path) return;
-      await mediaManager.saveToPublicStorage(path, fileName, mimeType);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setToastMessage("Saved to gallery");
-    } catch (error: any) {
-      console.error("[ChatScreen] save error:", error);
-      setToastMessage("Failed to save");
-    }
-  }, [decryptedPaths]);
-
-  // Build a lookup map: message id → LocalMessage (for reply previews)
-  const messageMap = useMemo(() => {
-    const map = new Map<number, LocalMessage>();
-    for (const m of messages) {
-      map.set(m.id, m);
-    }
-    return map;
-  }, [messages]);
-
-  const parseUtcTimestamp = useCallback((value: string) => {
-    if (!value) return 0;
-    if (value.endsWith("Z") || value.includes("+")) {
-      return new Date(value).getTime();
-    }
-    return new Date(`${value}Z`).getTime();
-  }, []);
-
-  const orderedMessages = useMemo(() => {
-    return messages
-      .slice()
-      .sort(
-        (a, b) =>
-          parseUtcTimestamp(a.created_at) - parseUtcTimestamp(b.created_at),
-      );
-  }, [messages, parseUtcTimestamp]);
+    },
+    [attachmentEpochMap, chatId, getEpochKeyForChat],
+  );
 
   useEffect(() => {
-    console.log("[ChatScreen] mount", { chatId, withUser });
-    hasInitialScrollDoneRef.current = false;
-    isNearBottomRef.current = true;
-    previousMessageCountRef.current = 0;
+    let cancelled = false;
 
-    // Load cached decrypted media paths from DB before messages arrive
-    const loadCachedMedia = async () => {
-      try {
-        const cached = await getCompletedMediaTransfers(chatId);
-        const validPaths = new Map<string, string>();
-        for (const [uploadId, path] of cached) {
+    const runAutoDownload = async () => {
+      for (const msg of messages) {
+        if (!msg.attachments?.length) continue;
+
+        for (const att of msg.attachments) {
+          if (cancelled) return;
+          if (decryptedPaths.has(att.upload_id)) continue;
+          if (autoDownloadInFlightRef.current.has(att.upload_id)) continue;
+          if (!mediaManager.shouldAutoDownload(att.total_size)) continue;
+
+          autoDownloadInFlightRef.current.add(att.upload_id);
           try {
-            const info = await mediaManager.getFileInfo(path);
-            if (info.exists) {
-              validPaths.set(uploadId, path);
-              // Mark as already handled so auto-download skips these
-              autoDownloadedRef.current.add(uploadId);
-            }
-          } catch {
-            // File no longer exists — will be re-downloaded
+            await handleDownloadAttachment(att, { silent: true });
+          } finally {
+            autoDownloadInFlightRef.current.delete(att.upload_id);
           }
         }
-        if (validPaths.size > 0) {
-          setDecryptedPaths((prev) => {
-            const merged = new Map(prev);
-            for (const [k, v] of validPaths) merged.set(k, v);
-            return merged;
-          });
-        }
-      } catch (error) {
-        console.error("[ChatScreen] failed to load cached media:", error);
       }
     };
 
-    loadCachedMedia().then(() => openChat(chatId));
-    return () => closeChat();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+    runAutoDownload().catch((error) => {
+      console.warn("[ChatScreen] auto-download failed", error);
+    });
 
-  const handleContentSizeChange = useCallback(() => {
-    if (orderedMessages.length === 0 || hasInitialScrollDoneRef.current) {
+    return () => {
+      cancelled = true;
+    };
+  }, [decryptedPaths, handleDownloadAttachment, messages]);
+
+  const replyLookup = useMemo(() => {
+    const me = auth.username ?? "Me";
+    const map = new Map<number, { text: string; sender: string }>();
+    for (const msg of messages) {
+      map.set(msg.id, {
+        text: getReplyPreviewText(msg.plaintext, msg.attachments?.length ?? 0),
+        sender: msg.sender_id === auth.userId ? me : withUser,
+      });
+    }
+    return map;
+  }, [auth.userId, auth.username, messages, withUser]);
+
+  const handleSaveAttachment = useCallback(
+    async (uploadId: string, fileName: string, mimeType: string) => {
+      try {
+        const path = decryptedPaths.get(uploadId);
+        if (!path) return;
+        await mediaManager.saveToPublicStorage(path, fileName, mimeType);
+        setToastMessage("Saved to device");
+      } catch (error) {
+        console.error("[ChatScreen] save attachment failed", error);
+        setToastMessage("Save failed");
+      }
+    },
+    [decryptedPaths],
+  );
+
+  const pickAttachments = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      const prepared: PendingAttachment[] = [];
+      for (const asset of result.assets) {
+        const out = await mediaManager.prepareUpload(
+          asset.uri,
+          asset.name,
+          asset.mimeType || "application/octet-stream",
+          asset.size || 0,
+        );
+        prepared.push(out.pending);
+      }
+
+      setPendingAttachments((prev) => [...prev, ...prepared]);
+    } catch (error) {
+      console.error("[ChatScreen] attachment pick failed", error);
+      setToastMessage("Attachment selection failed");
+    }
+  }, []);
+
+  const removePendingAttachment = useCallback((uploadId: string) => {
+    mediaManager.cancelUpload(uploadId);
+    setPendingAttachments((prev) => prev.filter((item) => item.uploadId !== uploadId));
+  }, []);
+
+  const sendWithOptimisticState = useCallback(
+    async (draft: OptimisticMessage) => {
+      setOptimisticMessages((prev) => [draft, ...prev]);
+
+      try {
+        await sendMessage(
+          draft.text,
+          draft.replyId ?? null,
+          draft.attachments.length ? draft.attachments : undefined,
+        );
+
+        setOptimisticMessages((prev) => prev.filter((item) => item.id !== draft.id));
+
+        if (draft.attachments.length > 0) {
+          const sentUploadIds = new Set(draft.attachments.map((item) => item.uploadId));
+          setPendingAttachments((prev) => prev.filter((item) => !sentUploadIds.has(item.uploadId)));
+        }
+      } catch (error: any) {
+        const errorMessage = error?.message || "Send failed";
+        setOptimisticMessages((prev) =>
+          prev.map((item) =>
+            item.id === draft.id
+              ? { ...item, state: "failed", error: errorMessage }
+              : item,
+          ),
+        );
+        setToastMessage(errorMessage);
+      }
+    },
+    [sendMessage],
+  );
+
+  const queueSend = useCallback(async () => {
+    if (!wsConnected) {
+      setToastMessage("Cannot send while disconnected");
       return;
     }
 
-    requestAnimationFrame(() => {
-      flatListRef.current?.scrollToEnd({ animated: false });
-    });
-    isNearBottomRef.current = true;
-    hasInitialScrollDoneRef.current = true;
-  }, [orderedMessages.length]);
-
-  const handleScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const distanceFromBottom =
-        contentSize.height - (contentOffset.y + layoutMeasurement.height);
-      isNearBottomRef.current = distanceFromBottom <= 100;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const previousCount = previousMessageCountRef.current;
-    const currentCount = orderedMessages.length;
-
-    if (
-      hasInitialScrollDoneRef.current &&
-      currentCount > previousCount &&
-      isNearBottomRef.current
-    ) {
-      requestAnimationFrame(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      });
+    const text = composerText.trim();
+    if (!text && pendingAttachments.length === 0) {
+      return;
     }
 
-    previousMessageCountRef.current = currentCount;
-  }, [orderedMessages.length]);
+    const attachmentSnapshot = pendingAttachments.map((item) => ({ ...item, mediaIds: [...item.mediaIds] }));
+    const draft: OptimisticMessage = {
+      id: `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text,
+      createdAt: new Date().toISOString(),
+      attachments: attachmentSnapshot,
+      replyId: replyTarget?.id ?? null,
+      replyText: replyTarget?.text,
+      replySender: replyTarget?.sender,
+      state: "sending",
+    };
 
-  // Auto-download attachments for incoming messages that are below the threshold
-  const autoDownloadedRef = useRef(new Set<string>());
-  useEffect(() => {
-    for (const msg of orderedMessages) {
-      if (!msg.attachments || msg.attachments.length === 0) continue;
+    setComposerText("");
+    setReplyTarget(null);
+    await sendWithOptimisticState(draft);
+  }, [composerText, pendingAttachments, replyTarget, sendWithOptimisticState, wsConnected]);
 
-      for (const att of msg.attachments) {
-        // Skip if already downloaded or already attempted
-        if (decryptedPaths.has(att.upload_id)) continue;
-        if (autoDownloadedRef.current.has(att.upload_id)) continue;
+  const retryOptimisticMessage = useCallback(
+    async (id: string) => {
+      const target = optimisticMessages.find((item) => item.id === id);
+      if (!target) return;
 
-        // Check auto-download threshold
-        if (!mediaManager.shouldAutoDownload(att.total_size)) continue;
-
-        autoDownloadedRef.current.add(att.upload_id);
-
-        // Check backward compat: old mediaMeta with per-file key
-        if (msg.mediaMeta?.attachments) {
-          const metaAtt = msg.mediaMeta.attachments.find(
-            (ma) => ma.upload_id === att.upload_id,
-          );
-          if (metaAtt?.file_key && metaAtt?.nonce) {
-            mediaManager.downloadAndDecrypt(att, metaAtt.file_key, metaAtt.nonce)
-              .then(async (path) => {
-                setDecryptedPaths((prev) => new Map(prev).set(att.upload_id, path));
-                await upsertMediaTransfer({
-                  upload_id: att.upload_id,
-                  chat_id: chatId,
-                  file_name: att.upload_id,
-                  mime_type: att.mime_type,
-                  file_size: att.total_size,
-                  status: "completed",
-                  total_chunks: att.total_chunks,
-                  chunks_completed: att.total_chunks,
-                  progress: 1,
-                  decrypted_path: path,
-                });
-                if (getMediaType(att.mime_type) === "video") {
-                  const thumb = await mediaManager.generateVideoThumbnail(path).catch(() => null);
-                  if (thumb) setThumbnailPaths((prev) => new Map(prev).set(att.upload_id, thumb));
-                }
-              })
-              .catch((err) => console.warn("[AutoDownload]", att.upload_id, err));
-            continue;
-          }
-        }
-
-        // Standard pipeline: use epoch key + attachment.nonce
-        getEpochKeyForChat(msg.epoch_id, chatId)
-          .then((epochKey) => {
-            if (!epochKey) return;
-            return mediaManager.downloadAndDecrypt(att, epochKey, att.nonce);
-          })
-          .then(async (path) => {
-            if (path) {
-              setDecryptedPaths((prev) => new Map(prev).set(att.upload_id, path));
-              await upsertMediaTransfer({
-                upload_id: att.upload_id,
-                chat_id: chatId,
-                file_name: att.upload_id,
-                mime_type: att.mime_type,
-                file_size: att.total_size,
-                status: "completed",
-                total_chunks: att.total_chunks,
-                chunks_completed: att.total_chunks,
-                progress: 1,
-                decrypted_path: path,
-              });
-              if (getMediaType(att.mime_type) === "video") {
-                const thumb = await mediaManager.generateVideoThumbnail(path).catch(() => null);
-                if (thumb) setThumbnailPaths((prev) => new Map(prev).set(att.upload_id, thumb));
-              }
-            }
-          })
-          .catch((err) => console.warn("[AutoDownload]", att.upload_id, err));
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderedMessages]);
-
-
-
-  // Swipe right to go back (screen-level gesture)
-  const backSwipeGesture = Gesture.Pan()
-    .activeOffsetX(80)
-    .onEnd((event) => {
-      if (event.translationX > 120) {
-        runOnJS(handleBack)();
-      }
-    });
-
-  const handleBack = () => {
-    console.log("[ChatScreen] back pressed", { chatId, withUser });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    navigation.goBack();
-  };
-
-  // Reply handlers
-  const handleSwipeReply = useCallback((message: LocalMessage) => {
-    setReplyTo(message);
-  }, []);
-
-  const handleCancelReply = useCallback(() => {
-    setReplyTo(null);
-  }, []);
-
-  const handleScrollToMessage = useCallback(
-    (messageId: number) => {
-      const idx = orderedMessages.findIndex((m) => m.id === messageId);
-      if (idx !== -1 && flatListRef.current) {
-        flatListRef.current.scrollToIndex({
-          index: idx,
-          animated: true,
-          viewPosition: 0.5,
-        });
-      }
-    },
-    [orderedMessages],
-  );
-
-  const handleSend = useCallback(
-    async (text: string) => {
-      try {
-        console.log("[ChatScreen] send start", {
-          chatId,
-          withUser,
-          length: text.length,
-          replyId: replyTo?.id,
-          attachmentCount: pendingAttachments.length,
-        });
-
-        // Pass un-uploaded attachments to sendMessage — uploads happen there with the epoch key
-        const attachmentsToSend = pendingAttachments.length > 0
-          ? [...pendingAttachments]
-          : undefined;
-
-        await sendMessage(text, replyTo?.id ?? null, attachmentsToSend);
-        setReplyTo(null);
-        setPendingAttachments([]);
-        console.log("[ChatScreen] send success", { chatId, withUser });
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-      } catch (error: any) {
-        console.error("[ChatScreen] send failed", {
-          chatId,
-          withUser,
-          error: error?.message || error,
-        });
-        Alert.alert("Error", error.message || "Failed to send message");
-      }
-    },
-    [sendMessage, replyTo, chatId, withUser, pendingAttachments],
-  );
-
-  // Determine sender name for a reply target
-  const getReplyInfo = useCallback(
-    (replyId: number | null | undefined) => {
-      if (!replyId) return { replyText: null, replySender: null };
-      const replyMsg = messageMap.get(replyId);
-      if (!replyMsg)
-        return { replyText: "[Message not found]", replySender: null };
-      const senderName =
-        replyMsg.sender_id === auth.userId ? "You" : withUser;
-      return {
-        replyText: getDisplayText(replyMsg),
-        replySender: senderName,
+      setOptimisticMessages((prev) => prev.filter((item) => item.id !== id));
+      const retryDraft: OptimisticMessage = {
+        ...target,
+        state: "sending",
+        error: undefined,
+        createdAt: new Date().toISOString(),
       };
+      await sendWithOptimisticState(retryDraft);
     },
-    [messageMap, auth.userId, withUser],
+    [optimisticMessages, sendWithOptimisticState],
   );
 
-  const renderItem = useCallback(
-    ({ item, index }: { item: LocalMessage; index: number }) => {
-      const isSent = item.sender_id === auth.userId;
-      const { replyText, replySender } = getReplyInfo(item.reply_id);
+  const loadEarlier = useCallback(async () => {
+    const sortedAsc = messages.slice().sort((a, b) => a.id - b.id);
+    const oldest = sortedAsc[0];
+    if (!oldest) return;
+
+    try {
+      await loadMessages(chatId, oldest.id);
+    } catch (error) {
+      console.error("[ChatScreen] pagination failed", error);
+    }
+  }, [chatId, loadMessages, messages]);
+
+  const giftedMessages = useMemo(() => {
+    const userId = auth.userId ?? 0;
+    const selfName = auth.username ?? "Me";
+
+    const serverMessages = messages
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map((message) => fromLocalMessage(message, userId, withUser, selfName));
+
+    const optimistic = optimisticMessages
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((message) => fromOptimisticMessage(message, userId, selfName));
+
+    const merged = [...optimistic, ...serverMessages];
+    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return merged;
+  }, [auth.userId, auth.username, messages, optimisticMessages, withUser]);
+
+  const renderBubble = useCallback(
+    (props: BubbleProps<OmnisGiftedMessage>) => {
+      const currentMessage = props.currentMessage;
+      if (!currentMessage) return null;
+
+      const localMessage = currentMessage.omnisLocalMessage;
+      const optimistic = currentMessage.omnisOptimisticMessage;
 
       return (
-        <SwipeableMessageRow
-          item={item}
-          index={index}
-          isSent={isSent}
-          replyText={replyText}
-          replySender={replySender}
-          onReplyPress={
-            item.reply_id
-              ? () => handleScrollToMessage(item.reply_id!)
-              : undefined
-          }
-          onSwipeReply={handleSwipeReply}
-          decryptedPaths={decryptedPaths}
-          thumbnailPaths={thumbnailPaths}
-          onDownloadAttachment={handleDownloadAttachment}
-          onSaveAttachment={handleSaveAttachment}
-        />
-      );
-    },
-    [auth.userId, getReplyInfo, handleScrollToMessage, handleSwipeReply, decryptedPaths, thumbnailPaths, handleDownloadAttachment, handleSaveAttachment],
-  );
-
-  const renderEmpty = () => (
-    <Animated.View
-      entering={FadeIn.delay(300).duration(500)}
-      style={styles.emptyContainer}
-    >
-      <Text style={styles.emptyText}>No messages yet. Say hi! 👋</Text>
-    </Animated.View>
-  );
-
-  // Determine the reply-to sender name for the input bar
-  const replyToSender = replyTo
-    ? replyTo.sender_id === auth.userId
-      ? "You"
-      : withUser
-    : null;
-
-  return (
-    <GestureDetector gesture={backSwipeGesture}>
-      <SafeAreaView style={styles.container} edges={["bottom"]}>
-        <View style={styles.flex}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Pressable onPress={handleBack} style={styles.backButton}>
-            <Ionicons name="chevron-back" size={28} color={Colors.accent} />
-          </Pressable>
-
-          <Pressable onPress={() => navigation.navigate("Profile")} style={styles.userInfo}>
-            <Avatar name={withUser} size={40} />
-            <View style={styles.userTextContainer}>
-              <Text style={styles.userName}>{withUser}</Text>
-              <Text style={styles.userStatus}>Tap for profile</Text>
+        <View>
+          {localMessage?.reply_id != null && replyLookup.has(localMessage.reply_id) ? (
+            <View style={styles.replyBubblePreviewWrap}>
+              <ReplyPreview
+                replyText={replyLookup.get(localMessage.reply_id)?.text ?? "Message"}
+                replySender={replyLookup.get(localMessage.reply_id)?.sender}
+                isSent={currentMessage.user._id === (auth.userId ?? 0)}
+              />
             </View>
-          </Pressable>
-
-          <View style={styles.headerRight} />
-        </View>
-
-        {/* Messages */}
-        <FlatList
-          ref={flatListRef}
-          data={orderedMessages}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={[
-            styles.messagesContent,
-            { paddingBottom: composerHeight + 8 },
-            orderedMessages.length === 0 && styles.messagesContentEmpty,
-          ]}
-          ListEmptyComponent={renderEmpty}
-          showsVerticalScrollIndicator={false}
-          inverted={false}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          keyboardShouldPersistTaps="handled"
-          onScrollToIndexFailed={(info) => {
-            // Fallback: scroll to approximate offset
-            flatListRef.current?.scrollToOffset({
-              offset: info.averageItemLength * info.index,
-              animated: true,
-            });
-          }}
-          onContentSizeChange={handleContentSizeChange}
-        />
-
-        {/* Floating composer (no absolute; overlaps via negative margin) */}
-        <View
-          onLayout={handleComposerLayout}
-          style={[styles.composer, { marginTop: -composerHeight }]}
-        >
-          {replyTo ? (
-            <ReplyPreview
-              replyText={getDisplayText(replyTo)}
-              replySender={replyToSender ?? undefined}
-              onDismiss={handleCancelReply}
-              isInputBar
-            />
           ) : null}
 
+          <SwipeReplyableBubble
+            enabled={currentMessage.omnisSource === "server" && !!currentMessage.omnisLocalMessage}
+            onReply={() => {
+              const local = currentMessage.omnisLocalMessage;
+              if (!local) return;
+              const sender = local.sender_id === auth.userId ? (auth.username ?? "Me") : withUser;
+              setReplyTarget({
+                id: local.id,
+                text: getReplyPreviewText(local.plaintext, local.attachments?.length ?? 0),
+                sender,
+              });
+            }}
+          >
+            <Bubble
+              {...props}
+              wrapperStyle={{
+                left: styles.leftBubble,
+                right: styles.rightBubble,
+              }}
+              textStyle={{
+                left: styles.leftBubbleText,
+                right: styles.rightBubbleText,
+              }}
+            />
+          </SwipeReplyableBubble>
+
+          {localMessage?.attachments?.length ? (
+            <View style={styles.attachmentContainer}>
+              <AttachmentRenderer
+                attachments={localMessage.attachments}
+                mediaMeta={localMessage.mediaMeta}
+                decryptedPaths={decryptedPaths}
+                thumbnailPaths={thumbnailPaths}
+                onDownload={handleDownloadAttachment}
+                onSave={handleSaveAttachment}
+              />
+            </View>
+          ) : null}
+
+          {optimistic?.state === "failed" ? (
+            <Pressable
+              style={styles.retryPill}
+              onPress={() => retryOptimisticMessage(optimistic.id)}
+            >
+              <Ionicons name="refresh" size={14} color={Colors.error} />
+              <Text style={styles.retryText}>Retry send</Text>
+            </Pressable>
+          ) : null}
+
+        </View>
+      );
+    },
+    [auth.userId, auth.username, decryptedPaths, handleDownloadAttachment, handleSaveAttachment, replyLookup, retryOptimisticMessage, thumbnailPaths, withUser],
+  );
+
+  const renderInputToolbar = useCallback(
+    (props: InputToolbarProps<OmnisGiftedMessage>) => (
+      <View
+        ref={toolbarHostRef}
+        style={toolbarLift > 0 ? { marginBottom: toolbarLift } : undefined}
+      >
+        <InputToolbar
+          {...props}
+          containerStyle={styles.toolbarContainer}
+          primaryStyle={styles.toolbarPrimary}
+        />
+      </View>
+    ),
+    [toolbarLift],
+  );
+
+  const renderComposer = useCallback(
+    (props: ComposerProps) => (
+      <Composer
+        {...props}
+        textInputProps={{
+          ...props.textInputProps,
+          placeholder: wsConnected ? "Message" : "Message (offline mode)",
+          placeholderTextColor: Colors.textMuted,
+          style: styles.composerInput,
+          multiline: true,
+          editable: wsConnected,
+        }}
+      />
+    ),
+    [wsConnected],
+  );
+
+  const renderActions = useCallback(
+    (props: ActionsProps) => (
+      <Actions
+        {...props}
+        buttonStyle={styles.actionsContainer}
+        icon={() => <Ionicons name="attach" size={22} color={Colors.accent} />}
+        actions={[
+          {
+            title: "Attach",
+            action: () => {
+              if (!wsConnected) {
+                setToastMessage("Cannot attach while disconnected");
+                return;
+              }
+              pickAttachments().catch(() => {});
+            },
+          },
+          { title: "Cancel", action: () => {} },
+        ]}
+      />
+    ),
+    [pickAttachments, wsConnected],
+  );
+
+  const renderSend = useCallback(() => {
+    const canSend = wsConnected && (composerText.trim().length > 0 || pendingAttachments.length > 0);
+    return (
+      <Pressable
+        style={styles.sendContainer}
+        onPress={() => {
+          queueSend().catch((error) => {
+            console.error("[ChatScreen] queue send failed", error);
+          });
+        }}
+        disabled={!canSend}
+      >
+        <View style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}>
+          <Ionicons name="send" size={18} color={Colors.accentDark} />
+        </View>
+      </Pressable>
+    );
+  }, [composerText, pendingAttachments.length, queueSend, wsConnected]);
+
+  const renderAccessory = useCallback(() => {
+    if (!replyTarget) return null;
+    return (
+      <ReplyPreview
+        isInputBar
+        replyText={replyTarget.text}
+        replySender={replyTarget.sender}
+        onDismiss={() => setReplyTarget(null)}
+      />
+    );
+  }, [replyTarget]);
+
+  const handlePressMessage = useCallback((message: OmnisGiftedMessage) => {
+    if (isRetryable(message) && message.omnisOptimisticMessage) {
+      retryOptimisticMessage(message.omnisOptimisticMessage.id).catch(() => {});
+      return;
+    }
+
+    if (message.omnisSource === "server" && message.omnisLocalMessage?.attachments?.length) {
+      Alert.alert("Attachments", "Use the attachment card controls to download or save media.");
+    }
+  }, [retryOptimisticMessage]);
+
+  return (
+    <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
+      <View style={styles.header}>
+        <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.textPrimary} />
+        </Pressable>
+
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.headerTitle}>{withUser}</Text>
+          <Text style={[styles.headerSubtitle, wsConnected ? styles.online : styles.offline]}>
+            {wsConnected ? "Connected" : "Reconnecting"}
+          </Text>
+        </View>
+      </View>
+
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={0}
+      >
+      <GiftedChat<OmnisGiftedMessage>
+        messages={giftedMessages}
+        user={{ _id: auth.userId ?? 0, name: auth.username ?? "Me" }}
+        text={composerText}
+        textInputProps={{
+          onChangeText: setComposerText,
+        }}
+        onSend={() => {
+          queueSend().catch((error) => {
+            console.error("[ChatScreen] queue send failed", error);
+          });
+        }}
+        renderBubble={renderBubble}
+        renderInputToolbar={renderInputToolbar}
+        renderComposer={renderComposer}
+        renderActions={renderActions}
+        renderSend={renderSend}
+        renderAccessory={renderAccessory}
+        renderChatFooter={() => (
           <AttachmentUploadProgress
             attachments={pendingAttachments}
-            onRemove={handleRemoveAttachment}
+            onRemove={removePendingAttachment}
           />
+        )}
+        onPressMessage={(_context: unknown, message: OmnisGiftedMessage) => handlePressMessage(message)}
+        loadEarlierMessagesProps={{
+          isAvailable: messages.length >= 50,
+          isLoading: isLoadingMessages,
+          onPress: loadEarlier,
+          isInfiniteScrollEnabled: false,
+        }}
+        isSendButtonAlwaysVisible
+        messagesContainerStyle={styles.messagesContainer}
+        listProps={{
+          style: styles.messagesList,
+          contentContainerStyle: styles.messagesContent,
+        }}
+        isUsernameVisible={false}
+      />
 
-          <MessageInput
-            onSend={handleSend}
-            disableSend={isSending || !auth.isAuthenticated}
-            disableInput={!auth.isAuthenticated}
-            onDisabledPress={() =>
-              setToastMessage("Not connected to server. Please check the URL in settings.")
-            }
-            onAttachPress={auth.isAuthenticated ? handleAttachPress : undefined}
-            hasAttachments={pendingAttachments.some((pa) => pa.status === "uploaded" || pa.status === "queued")}
-          />
-        </View>
-        </View>
-        <Toast message={toastMessage} onHide={() => setToastMessage(null)} />
-      </SafeAreaView>
-    </GestureDetector>
+      </KeyboardAvoidingView>
+
+      <Toast
+        message={toastMessage}
+        onHide={() => setToastMessage(null)}
+      />
+    </SafeAreaView>
   );
 }
 
@@ -716,80 +773,140 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  flex: {
-    flex: 1,
-  },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+    height: 56,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  userInfo: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
     paddingHorizontal: 8,
   },
-  userTextContainer: {
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTextWrap: {
+    marginLeft: 8,
+  },
+  headerTitle: {
+    color: Colors.textPrimary,
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    marginTop: 1,
+  },
+  online: {
+    color: Colors.success,
+  },
+  offline: {
+    color: Colors.warning,
+  },
+  keyboardAvoid: {
     flex: 1,
   },
-  userName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: Colors.textPrimary,
+  messagesContainer: {
+    backgroundColor: Colors.background,
   },
-  userStatus: {
-    fontSize: 12,
-    color: Colors.textMuted,
-  },
-  headerRight: {
-    width: 44,
+  messagesList: {
+    backgroundColor: Colors.background,
   },
   messagesContent: {
-    padding: 8,
-    flexGrow: 1,
-    justifyContent: "flex-end",
+    paddingBottom: 12,
+    backgroundColor: Colors.background,
   },
-  messagesContentEmpty: {
-    justifyContent: "center",
+  leftBubble: {
+    backgroundColor: Colors.messageReceived,
+    borderBottomLeftRadius: 4,
   },
-  emptyContainer: {
-    alignItems: "center",
-    padding: 32,
+  rightBubble: {
+    backgroundColor: Colors.messageSent,
+    borderBottomRightRadius: 4,
   },
-  emptyText: {
+  leftBubbleText: {
+    color: Colors.textPrimary,
     fontSize: 16,
-    color: Colors.textSecondary,
-    textAlign: "center",
+    lineHeight: 22,
   },
-  swipeableRow: {
-    position: "relative",
+  rightBubbleText: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    lineHeight: 22,
   },
-  replyIconContainer: {
-    position: "absolute",
-    left: 8,
-    top: 0,
-    bottom: 0,
+  attachmentContainer: {
+    marginHorizontal: 8,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  replyBubblePreviewWrap: {
+    marginHorizontal: 8,
+    marginBottom: 2,
+  },
+  retryPill: {
+    marginTop: 4,
+    marginLeft: 12,
+    marginBottom: 8,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.error,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  retryText: {
+    color: Colors.error,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  toolbarContainer: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.background,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  toolbarPrimary: {
+    alignItems: "flex-end",
+  },
+  actionsContainer: {
+    marginLeft: 2,
+    marginBottom: 4,
+    marginRight: 4,
+  },
+  composerInput: {
+    color: Colors.textPrimary,
+    backgroundColor: Colors.surface,
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
+    marginRight: 8,
+    marginLeft: 4,
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  sendContainer: {
     justifyContent: "center",
     alignItems: "center",
-    width: 32,
+    marginBottom: 4,
+    marginRight: 2,
   },
-  swipeableContent: {
-    width: "100%",
+  sendButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.accent,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  composer: {
-    zIndex: 10,
-    elevation: 10,
-    backgroundColor: Colors.transparent,
+  sendButtonDisabled: {
+    opacity: 0.45,
   },
 });

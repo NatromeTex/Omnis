@@ -76,9 +76,11 @@ export const COMPATIBLE_VERSION_MAX = 60;
 // Message limits
 export const MESSAGE_FETCH_LIMIT = 50;
 export const MAX_MESSAGE_LENGTH = 4096;
+export const MESSAGE_SEND_RETRY_MAX = 5;
+export const MESSAGE_SEND_RETRY_BASE_MS = 800;
 
 // Media limits
 export const MEDIA_CHUNK_MAX_BYTES = 256 * 1024 * 1024; // 256 MiB chunk + metadata envelope
-export const MEDIA_AUTO_DOWNLOAD_THRESHOLD = 256 * 1024 * 1024; // 256 MiB
+export const MEDIA_AUTO_DOWNLOAD_THRESHOLD = 250 * 1024 * 1024; // 250 MB
 export const MEDIA_UPLOAD_RETRY_MAX = 5;
 export const MEDIA_UPLOAD_RETRY_BASE_MS = 1000;

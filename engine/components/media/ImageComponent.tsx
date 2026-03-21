@@ -4,9 +4,9 @@
  */
 
 import React, { useCallback, useState } from "react";
+import { Image as ExpoImage } from "expo-image";
 import {
   ActivityIndicator,
-  Image,
   Modal,
   Pressable,
   StyleSheet,
@@ -54,10 +54,11 @@ export function ImageComponent({
             <ActivityIndicator size="small" color={Colors.accent} />
           </View>
         )}
-        <Image
+        <ExpoImage
           source={{ uri }}
           style={[styles.image, { width, height }]}
-          resizeMode="cover"
+          contentFit="cover"
+          autoplay
           onLoad={handleLoad}
         />
       </Pressable>
@@ -72,10 +73,11 @@ export function ImageComponent({
           style={styles.fullscreenOverlay}
           onPress={() => setFullscreen(false)}
         >
-          <Image
+          <ExpoImage
             source={{ uri }}
             style={styles.fullscreenImage}
-            resizeMode="contain"
+            contentFit="contain"
+            autoplay
           />
         </Pressable>
       </Modal>
