@@ -43,4 +43,6 @@ export { OmnisMediaTurboModule } from "./OmnisMediaTurboModule";
 export * from "./mediaApi";
 export { default as NativeMediaWorkerModule } from "./NativeMediaWorkerModule";
 export * from "./mediaNotifications";
+export * from "./chatNotifications";
+export * from "./pushBootstrap";
 export * from "./retry";

@@ -23,6 +23,11 @@ import {
     generateIdentityKeyPair,
 } from "../services/crypto";
 import { clearAllData, initDatabase } from "../services/database";
+import {
+  registerCurrentDeviceFcmToken,
+  subscribeToFcmTokenRefresh,
+} from "../services/pushBootstrap";
+import { initChatNotifications } from "../services/chatNotifications";
 import { initMediaNotifications } from "../services/mediaNotifications";
 import {
     addUrlToHistory,
@@ -156,6 +161,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         // Initialize notification channels for media transfers
         await initMediaNotifications();
+        await initChatNotifications();
 
         // Get device ID
         const deviceId = await getDeviceId();
@@ -213,6 +219,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                   publicKey: storedKeys.publicKey,
                 },
               });
+            }
+
+            try {
+              await registerCurrentDeviceFcmToken();
+            } catch (pushError) {
+              console.warn("[Push] Failed to register device token on restore:", pushError);
             }
           } catch {
             // Token is invalid, clear auth
@@ -299,7 +311,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     // Persist identity keys to secure storage for session restoration
     await setIdentityKeys(privateKey, keyBlob.identity_pub);
+
+    try {
+      await registerCurrentDeviceFcmToken();
+    } catch (pushError) {
+      console.warn("[Push] Failed to register device token on login:", pushError);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!state.auth.isAuthenticated) return;
+
+    const unsubscribe = subscribeToFcmTokenRefresh();
+    return unsubscribe;
+  }, [state.auth.isAuthenticated]);
 
   // Logout
   const logout = useCallback(async () => {

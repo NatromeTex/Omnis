@@ -159,6 +159,49 @@ export async function revokeOtherSessions(): Promise<{ status: string }> {
   });
 }
 
+// ============ Device Push API ============
+export async function registerFcmToken(
+  fcmToken: string,
+  platform: "android" = "android",
+): Promise<{
+  id: number;
+  device_id: string;
+  platform: string;
+  enabled: boolean;
+  failure_count: number;
+  invalid_since: string | null;
+}> {
+  return request(ENDPOINTS.DEVICE_FCM_REGISTER, {
+    method: "POST",
+    body: JSON.stringify({
+      fcm_token: fcmToken,
+      platform,
+    }),
+  });
+}
+
+export async function disableCurrentFcmToken(): Promise<{
+  status: string;
+  updated: number;
+}> {
+  return request(ENDPOINTS.DEVICE_FCM_CURRENT, {
+    method: "DELETE",
+  });
+}
+
+export async function listFcmTokens(): Promise<
+  Array<{
+    id: number;
+    device_id: string;
+    platform: string;
+    enabled: boolean;
+    failure_count: number;
+    invalid_since: string | null;
+  }>
+> {
+  return request(ENDPOINTS.DEVICE_FCM_TOKENS);
+}
+
 // ============ Public Key API ============
 export async function getPublicKey(username: string): Promise<{
   username: string;

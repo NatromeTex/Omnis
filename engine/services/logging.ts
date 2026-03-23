@@ -3,6 +3,8 @@
  * Captures console output and exposes it for in-app viewing.
  */
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 type LogLevel = "log" | "info" | "warn" | "error" | "debug";
 
 export type LogEntry = {
@@ -12,9 +14,13 @@ export type LogEntry = {
 };
 
 const MAX_LOG_ENTRIES = 2000;
+const LOG_STORAGE_KEY = "omnisAppLogs";
 let initialized = false;
 let entries: LogEntry[] = [];
 const listeners = new Set<(logs: LogEntry[]) => void>();
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let didHydrate = false;
 
 function notify() {
   const snapshot = entries.slice();
@@ -80,10 +86,58 @@ function appendLog(level: LogLevel, args: unknown[]) {
   if (entries.length > MAX_LOG_ENTRIES) {
     entries = entries.slice(entries.length - MAX_LOG_ENTRIES);
   }
+  schedulePersist();
   notify();
 }
 
+function schedulePersist() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistLogs();
+  }, 50);
+}
+
+async function persistLogs() {
+  try {
+    await AsyncStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Best-effort persistence only.
+  }
+}
+
+async function hydrateLogs() {
+  if (didHydrate) return;
+  didHydrate = true;
+  try {
+    const raw = await AsyncStorage.getItem(LOG_STORAGE_KEY);
+    if (!raw) return;
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+
+    entries = parsed
+      .filter((item) => item && typeof item.timestamp === "number" && typeof item.level === "string" && typeof item.message === "string")
+      .slice(-MAX_LOG_ENTRIES);
+    notify();
+  } catch {
+    // Ignore malformed persisted logs.
+  }
+}
+
+export function appLog(level: LogLevel, ...args: unknown[]) {
+  appendLog(level, args);
+
+  // In headless/background contexts initLogCapture may never run,
+  // so still forward to native console once.
+  if (!initialized) {
+    const sink = console[level] ?? console.log;
+    sink(...args);
+  }
+}
+
 export function initLogCapture() {
+  void hydrateLogs();
   if (initialized) return;
   initialized = true;
 
@@ -138,5 +192,6 @@ export function subscribeLogs(listener: (logs: LogEntry[]) => void): () => void 
 
 export function clearLogs() {
   entries = [];
+  void AsyncStorage.removeItem(LOG_STORAGE_KEY);
   notify();
 }

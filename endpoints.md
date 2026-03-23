@@ -329,6 +329,100 @@ Errors:
 
 ---
 
+## Device Push Endpoints
+
+Push notifications are used as a wake signal for offline clients. The push
+payload never includes message ciphertext or key material. Clients should wake,
+then fetch full encrypted message details from `GET /chat/fetch/{chat_id}`.
+
+### POST /device/fcm/register
+
+Registers or updates the Firebase Cloud Messaging token for the current device.
+
+**Headers**
+```
+Authorization: Bearer <token>
+X-Device-ID: <uuid-v4>
+```
+
+**Request body**
+```json
+{
+  "fcm_token": "string",
+  "platform": "android"
+}
+```
+
+**Response — 200 OK**
+```json
+{
+  "id": 1,
+  "device_id": "uuid-v4",
+  "platform": "android",
+  "enabled": true,
+  "failure_count": 0,
+  "invalid_since": null
+}
+```
+
+Errors:
+- `401` — unauthorized
+- `400` — invalid platform or missing token
+
+---
+
+### DELETE /device/fcm/current
+
+Disables push delivery for the current device token.
+
+**Headers**
+```
+Authorization: Bearer <token>
+X-Device-ID: <uuid-v4>
+```
+
+**Response — 200 OK**
+```json
+{
+  "status": "disabled",
+  "updated": 1
+}
+```
+
+Errors:
+- `401` — unauthorized
+
+---
+
+### GET /device/fcm/tokens
+
+Lists Android FCM token records for the authenticated user.
+
+**Headers**
+```
+Authorization: Bearer <token>
+X-Device-ID: <uuid-v4>
+```
+
+**Response — 200 OK**
+```json
+[
+  {
+    "id": 1,
+    "device_id": "uuid-v4",
+    "platform": "android",
+    "enabled": true,
+    "failure_count": 0,
+    "invalid_since": null
+  }
+]
+```
+
+Errors:
+- `401` — unauthorized
+
+---
+
 ## User Public Key Endpoints
 
 ### POST /user/pkey/publish
@@ -729,6 +823,12 @@ Errors:
 ### POST /chat/{chat_id}/message
 
 Sends a message in a chat.
+
+If the recipient is not actively connected to the chat via WebSocket, the
+server attempts an Android FCM wake push to the recipient's registered devices.
+The push payload contains only wake metadata (`chat_id`, `message_id`, sender
+identity, and generic text). The client must fetch full message details from
+the API after wake.
 
 **Headers**
 ```

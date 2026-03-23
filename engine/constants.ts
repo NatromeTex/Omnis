@@ -21,6 +21,7 @@ export const STORAGE_KEYS = {
   DEVICE_ID: "deviceId",
   CURRENT_USER_ID: "currentUserId",
   CURRENT_USERNAME: "currentUsername",
+  CHAT_NOTIFICATION_CURSOR: "chatNotificationCursor",
   API_BASE_URL: "apiBaseUrl",
   THEME_COLOR: "themeColor",
   ONBOARDING_COMPLETE: "onboardingComplete",
@@ -47,6 +48,11 @@ export const ENDPOINTS = {
 
   // Users
   USERS_SEARCH: "/users/search",
+
+  // Device Push
+  DEVICE_FCM_REGISTER: "/device/fcm/register",
+  DEVICE_FCM_CURRENT: "/device/fcm/current",
+  DEVICE_FCM_TOKENS: "/device/fcm/tokens",
 
   // Chat
   CHAT_LIST: "/chat/list",

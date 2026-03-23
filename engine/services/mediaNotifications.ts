@@ -23,6 +23,7 @@ import type { MediaTransferStatus } from "../types";
 // ─── Channel IDs ──────────────────────────────────────────────────────
 const CHANNEL_UPLOAD = "omnis_media_upload";
 const CHANNEL_DOWNLOAD = "omnis_media_download";
+const SMALL_ICON = "ic_stat_notify";
 
 export const NOTIFICATION_CHANNELS = {
   UPLOAD: CHANNEL_UPLOAD,
@@ -91,7 +92,7 @@ export async function showTransferProgress(
     body,
     android: {
       channelId,
-      smallIcon: "ic_notification", // falls back to launcher icon
+      smallIcon: SMALL_ICON,
       category: AndroidCategory.PROGRESS,
       visibility: AndroidVisibility.PUBLIC,
       ongoing: true,
@@ -125,7 +126,7 @@ export async function notifyTransferComplete(
     body: fileName,
     android: {
       channelId,
-      smallIcon: "ic_notification",
+      smallIcon: SMALL_ICON,
       ongoing: false,
       autoCancel: true,
       onlyAlertOnce: true,
@@ -149,7 +150,7 @@ export async function notifyTransferFailed(
     body: `${fileName} — ${error}`,
     android: {
       channelId: CHANNEL_UPLOAD, // use upload channel for all errors
-      smallIcon: "ic_notification",
+      smallIcon: SMALL_ICON,
       ongoing: false,
       autoCancel: true,
     },

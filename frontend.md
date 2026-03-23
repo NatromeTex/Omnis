@@ -11,7 +11,7 @@ The frontend is a thin client responsible for:
 - **User interaction**
   - Signup, login, logout
   - Listing chats and creating new chats
-  - Sending and receiving messages in real time (via polling or push)
+  - Sending and receiving messages in real time (WebSocket-first, REST fallback)
   - Account/session management UI (view/revoke sessions)
 - **Local cryptography** (end‑to‑end encryption)
   - Generating and managing long‑term identity key pairs (ECDH P‑384)
@@ -20,8 +20,10 @@ The frontend is a thin client responsible for:
   - Wrapping/unwrapping epoch keys for each peer (ECDH + HKDF + AES‑GCM)
   - Encrypting and decrypting message payloads using epoch keys (AES‑GCM)
 - **Networking**
-  - Talking to the backend over HTTPS only
+  - Talking to the backend over HTTPS (REST) and WSS/WS (chat stream)
   - Including device identifier (`X-Device-ID`) and bearer token for authenticated calls
+  - Authenticating chat WebSocket connections with a first-frame auth payload
+  - Registering and managing device push tokens for background wake delivery (mobile)
 
 The server **never sees plaintext messages or identity private keys**. It only stores encrypted key material and ciphertext.
 
@@ -123,7 +125,15 @@ The server **never sees plaintext messages or identity private keys**. It only s
 
 ### 3.4 Chat & Epoch Handling
 
-- When a chat is opened or messages are fetched (`/chat/fetch/{chat_id}`), the frontend:
+- When a chat is opened, the frontend should open `WebSocket /chat/ws/{chat_id}` and
+  authenticate immediately using the first frame:
+  - `{"type":"auth","token":"<session_token>","device_id":"<uuid-v4>"}`.
+  - On successful auth, the server sends a `history` frame with recent messages.
+  - New messages are then delivered via `new_message` frames.
+  - The client should send heartbeat pings (`{"type":"ping"}`), handle `pong`,
+    and reconnect automatically on recoverable disconnects.
+- When message history is fetched via REST (`/chat/fetch/{chat_id}`), or received via
+  WebSocket (`history` / `new_message`), the frontend:
   - Receives `messages[]` containing message data with `epoch_id` references.
   - For each message, check if the epoch key for `epoch_id` is already cached locally.
   - For any epoch whose wrapped key is not yet cached:
@@ -137,6 +147,7 @@ The server **never sees plaintext messages or identity private keys**. It only s
   - Ensure a **current epoch** exists (create via `/chat/{chat_id}/epoch` if allowed by server policy—rate limits and message counts must be respected).
   - Use the latest epoch key to AES‑GCM encrypt the UTF‑8 message body.
   - Post ciphertext, nonce, and epoch id via `/chat/{chat_id}/message`.
+  - If the send fails due to stale or unknown epoch, refresh epoch state and retry once.
 
 ### 3.5 Media Attachments
 
@@ -227,6 +238,51 @@ Download pipeline:
 2. Stream-download each chunk from `GET /media/download/{media_id}`.
 3. Reassemble by `chunk_index`.
 4. Decrypt reassembled blob using attachment `nonce`.
+
+### 3.6 Notification System (WebSocket + FCM Wake)
+
+The notification model is **delivery-first via WebSocket**, with **Android FCM push**
+as an offline wake mechanism.
+
+#### A. Foreground / active-chat flow
+
+1. User opens a chat.
+2. Client opens `WebSocket /chat/ws/{chat_id}` and sends first-frame auth
+  (`type=auth`, session token, device id).
+3. Server validates chat membership and streams:
+  - one `history` frame on connect,
+  - `new_message` frames for subsequent messages.
+4. Client resolves missing epochs using `GET /chat/{chat_id}/{epoch_id}/fetch`,
+  decrypts message payloads locally, and renders immediately.
+
+#### B. Background / offline flow (Android push wake)
+
+1. Mobile client registers an FCM token using `POST /device/fcm/register`
+  (`platform` currently `android`).
+2. When a sender calls `POST /chat/{chat_id}/message`, server persists the message
+  first and broadcasts over WebSocket to online devices.
+3. If recipient devices are not currently active in that chat WebSocket, server
+  sends an FCM wake push to enabled tokens for that user/device set.
+4. Wake push payload contains only metadata (`chat_id`, sender identifiers,
+  timestamp, generic body text). It never includes ciphertext, epoch keys, or
+  private key material.
+5. Woken client then fetches encrypted data through API/WebSocket and performs
+  decryption locally.
+
+#### C. Token lifecycle and reliability
+
+- Register/update token: `POST /device/fcm/register`.
+- Disable current device token: `DELETE /device/fcm/current`.
+- List token records: `GET /device/fcm/tokens`.
+- On logout, backend disables the current device token automatically.
+- Backend tracks delivery outcomes (`failure_count`, invalid-token state) and
+  disables tokens marked invalid by FCM.
+
+#### D. Security invariants
+
+- Push is a wake hint, not a transport for protected message content.
+- Full message confidentiality remains end-to-end via client-side key handling.
+- Device scoping remains enforced by `(Bearer token, X-Device-ID)` pairing.
 
 ---
 
