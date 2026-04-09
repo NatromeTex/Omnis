@@ -17,7 +17,7 @@ PRAGMA foreign_keys = ON;
 - Devices are per-user
 - Sessions are per-user per-device
 - Chats are **1-to-1 only**
-- Messages are append-only
+- Messages are append-only; deletion is **soft** (`is_deleted` flag) to preserve reply-thread integrity
 - Strong foreign-key integrity
 - No premature abstractions
 
@@ -91,6 +91,8 @@ CREATE TABLE messages (
     epoch_id INTEGER,
     ciphertext TEXT NOT NULL,
     nonce TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0,  -- soft delete flag (0 = false, 1 = true)
+    deleted_at INTEGER,                      -- UTC timestamp set on soft deletion, NULL otherwise
     created_at INTEGER NOT NULL,
 
     FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
@@ -99,6 +101,11 @@ CREATE TABLE messages (
     FOREIGN KEY (epoch_id) REFERENCES chat_epochs(id)
 );
 ```
+
+> **Soft delete behaviour**: When a message is deleted via `DELETE /chat/{chat_id}/message/{message_id}`,
+> `is_deleted` is set to `1` and `deleted_at` is set to the current UTC time. The row is retained so
+> reply threads remain coherent. Any fetch endpoint that returns this message will return an empty
+> string for `ciphertext` and `nonce`, and include `"deleted": true` in the response object.
 
 ---
 

@@ -64,11 +64,20 @@ The server **never sees plaintext messages or identity private keys**. It only s
 ### 2.3 Local Storage & State
 
 - **Allowed in persistent storage**:
-  - Auth token (`authToken`)
-  - Device identifier (`deviceId`)
-  - Current user identifiers (`currentUserId`, `currentUsername`)
+  - Device identifier (`deviceId`) — non-secret, must survive app restarts
+  - Current user identifiers (`currentUserId`, `currentUsername`) — non-secret UI state
   - Non‑sensitive UI state
+- **Auth token storage — platform-specific guidance**:
+  - **Web**: Do **not** store the session token in `localStorage` or `sessionStorage`. Both are
+    accessible to any JavaScript running on the page; an XSS vulnerability would immediately
+    expose the token and allow full account takeover. Prefer one of:
+    - In-memory only (variable/module-level): token is lost on page reload but is never
+      reachable from injected scripts.
+    - A `Secure; HttpOnly; SameSite=Strict` cookie set by the server (requires a server-side
+      session relay; the token itself never touches JavaScript).
+  - **Mobile (Android/iOS)**: Store in the platform keystore/keychain (Android `EncryptedSharedPreferences` / iOS Keychain), not in plain shared preferences or files.
 - **Not allowed in persistent storage**:
+  - Auth token in `localStorage` / `sessionStorage` on web
   - Raw passwords
   - Raw or decrypted identity private keys
   - Raw epoch keys
@@ -78,6 +87,8 @@ The server **never sees plaintext messages or identity private keys**. It only s
 - All message bodies must be displayed as **escaped HTML** (no raw HTML rendering from user content).
 - No inline event handlers are allowed in templates; use DOM APIs and `addEventListener`.
 - Avoid third‑party scripts unless strictly required; if added, use Subresource Integrity (SRI) and CSP where possible.
+- Because the session token grants full account access, XSS is a critical risk. Apply a strict
+  Content Security Policy (`default-src 'self'`) and never place the token where scripts can read it (see 2.3 above).
 
 ### 2.5 Session & Device Management
 
@@ -148,6 +159,12 @@ The server **never sees plaintext messages or identity private keys**. It only s
   - Use the latest epoch key to AES‑GCM encrypt the UTF‑8 message body.
   - Post ciphertext, nonce, and epoch id via `/chat/{chat_id}/message`.
   - If the send fails due to stale or unknown epoch, refresh epoch state and retry once.
+- **Deleted messages**: Each message object includes a `deleted` boolean field.
+  - When `deleted` is `true`, `ciphertext` and `nonce` are empty strings — do **not** attempt decryption.
+  - Render a placeholder such as *"This message was deleted"* in place of the message body.
+  - Attachments are still listed in the `attachments` array but should not be shown.
+  - To delete a message, call `DELETE /chat/{chat_id}/message/{message_id}`. Only the sender of a message may delete it (the server enforces this with a `403`).
+  - On receiving a `message_deleted` WebSocket frame (`{"type":"message_deleted","message_id":…}`), find the matching message in the local store and mark it as deleted (clear ciphertext/nonce, set `deleted = true`) so the UI updates in real time without a refetch.
 
 ### 3.5 Media Attachments
 

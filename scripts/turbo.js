@@ -5,8 +5,8 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const TURBO_MODULE_DIR_CANDIDATES = [
-  path.join(ROOT, 'engine', 'TurboModules'),
   path.join(ROOT, 'engine', 'turbomodules'),
+  path.join(ROOT, 'engine', 'TurboModules'),
 ];
 
 function resolveTurboModulesDir() {
@@ -64,17 +64,4 @@ function init() {
   console.log('TurboModule Kotlin files synced to android.');
 }
 
-function printUsage() {
-  console.log('Usage:');
-  console.log('  npm run tubo -- init');
-  console.log('  npm run tubo:init');
-}
-
-const command = process.argv[2];
-
-if (command === 'init') {
-  init();
-} else {
-  printUsage();
-  process.exitCode = 1;
-}
+init();
